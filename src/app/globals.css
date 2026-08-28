@@ -1,26 +1,98 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
+/* ============================================================
+   声音实验室 / Shadowing Booth — 设计 token
+   深炭黑棚内环境 + 琥珀橙信号色，波形与 VU 表为视觉主轴。
+   ============================================================ */
+
+@theme {
+  /* 棚内暗色阶 */
+  --color-booth-950: #0d0b09;
+  --color-booth-900: #14110e;
+  --color-booth-850: #1a1713;
+  --color-booth-800: #211d18;
+  --color-booth-700: #2b251e;
+  --color-booth-600: #3a322a;
+
+  /* 暖墨色文字阶 */
+  --color-ink-50: #f0e9dd;
+  --color-ink-100: #d9d0c2;
+  --color-ink-200: #b3a99a;
+  --color-ink-300: #948b7d;
+  --color-ink-400: #6b6357;
+  --color-ink-500: #4c453c;
+
+  /* 信号色 */
+  --color-signal: #ff8c42;
+  --color-signal-strong: #ff6a1e;
+  --color-signal-dim: #ff8c4224;
+  --color-rec: #ff4d3d;
+  --color-good: #7fd8a0;
+  --color-warn: #ffc94d;
+
+  /* 字体 */
+  --font-sans: var(--font-archivo), ui-sans-serif, system-ui, -apple-system,
+    "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
+  --font-display: var(--font-chakra), var(--font-archivo),
+    ui-sans-serif, system-ui, "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-mono: var(--font-jetbrains), ui-monospace, SFMono-Regular, Menlo,
+    Consolas, monospace;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
+@layer base {
+  html {
+    color-scheme: dark;
+  }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+  body {
+    background-color: var(--color-booth-950);
+    color: var(--color-ink-50);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  /* —— 浏览器原生控件也纳入设计 —— */
+  ::selection {
+    background-color: var(--color-signal);
+    color: #1a0f05;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-signal);
+    outline-offset: 2px;
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: var(--color-booth-700);
+    border-radius: 9999px;
+    border: 2px solid var(--color-booth-950);
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--color-booth-600);
+  }
+
+  /* 数字/计时一律用等宽，仿佛设备读数 */
+  .tabular {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.01em;
   }
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+/* 波形条：棚内主视觉元素之一 */
+@utility wave-bar {
+  border-radius: 9999px;
+  background-image: linear-gradient(
+    to top,
+    var(--color-signal-strong),
+    var(--color-signal)
+  );
 }

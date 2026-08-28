@@ -1,69 +1,153 @@
-import Image from "next/image";
+"use client";
+
+import { useEffect, useState } from "react";
+import Link from "next/link";
+import AppShell from "@/components/AppShell";
+import { loadDashboard } from "@/lib/stats";
 
 export default function Home() {
+  const [data, setData] = useState<Awaited<
+    ReturnType<typeof loadDashboard>
+  > | null>(null);
+
+  useEffect(() => {
+    loadDashboard().then(setData);
+  }, []);
+
+  const d = data ?? {
+    streak: 0,
+    last7: [],
+    dueCards: 0,
+    materialCount: 0,
+    sentenceCount: 0,
+    todayDone: 0,
+  };
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert h-5 w-[100px]"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the{" "}
-            <code className="rounded bg-black/[.06] px-1.5 py-0.5 font-mono text-[0.9em] dark:bg-white/[.08]">
-              page.tsx
-            </code>{" "}
-            file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
+    <AppShell>
+      <header className="flex items-center justify-between px-5 pt-6 pb-4">
+        <div>
+          <p className="font-mono text-[10px] uppercase tracking-[0.25em] text-signal">
+            Shadowing Booth
           </p>
+          <h1 className="mt-1 font-display text-xl font-semibold text-ink-50">
+            跟读训练
+          </h1>
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert h-[14px] w-4"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={14}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+        <div className="rounded-full border border-booth-700 px-3 py-1 font-mono text-[11px] text-ink-300">
+          DAY {String(d.streak).padStart(2, "0")}
         </div>
+      </header>
+
+      <main className="space-y-4 px-5">
+        {/* 连续天数 */}
+        <section className="rounded-2xl border border-booth-700 bg-booth-900 p-5">
+          <div className="flex items-end justify-between">
+            <div>
+              <p className="text-xs text-ink-300">连续学习</p>
+              <p className="mt-1 font-display text-4xl font-bold leading-none text-ink-50">
+                {d.streak}
+                <span className="ml-1 font-sans text-base font-medium text-ink-300">
+                  天
+                </span>
+              </p>
+            </div>
+            <div className="flex gap-1.5">
+              {d.last7.map((day) => (
+                <span
+                  key={day.date}
+                  className={`h-7 w-2.5 rounded-full ${
+                    day.done ? "wave-bar" : "bg-booth-700"
+                  }`}
+                />
+              ))}
+            </div>
+          </div>
+        </section>
+
+        {/* 今日任务 */}
+        <section>
+          <h2 className="mb-2 text-xs font-medium text-ink-300">今日任务</h2>
+          <div className="grid grid-cols-2 gap-3">
+            <StatTile label="待复习" value={d.dueCards} unit="卡" accent href="/review" />
+            <StatTile label="今日已跟读" value={d.todayDone} unit="句" />
+          </div>
+        </section>
+
+        {/* 空状态 / 主操作 */}
+        <section className="rounded-2xl border border-booth-700 bg-booth-900 p-6 text-center">
+          <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-booth-800">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
+              <path
+                d="M8 3v4M16 3v4M4 10h16"
+                stroke="var(--color-signal)"
+                strokeWidth="1.6"
+                strokeLinecap="round"
+              />
+              <rect
+                x="4"
+                y="5"
+                width="16"
+                height="15"
+                rx="2.5"
+                stroke="var(--color-signal)"
+                strokeWidth="1.6"
+              />
+            </svg>
+          </div>
+          <h3 className="mt-3 font-display text-base font-semibold text-ink-50">
+            {d.materialCount === 0 ? "还没有素材" : "开始今天的跟读"}
+          </h3>
+          <p className="mt-1 text-sm text-ink-300">
+            {d.materialCount === 0
+              ? "导入一段英剧美剧片段，开始第一次跟读"
+              : `已有 ${d.materialCount} 段素材 · ${d.sentenceCount} 句可练`}
+          </p>
+          <Link
+            href="/library"
+            className="mt-5 inline-flex h-11 items-center justify-center rounded-full bg-signal px-6 text-sm font-semibold text-booth-950 transition-colors hover:bg-signal-strong"
+          >
+            {d.materialCount === 0 ? "导入素材" : "去跟读"}
+          </Link>
+        </section>
       </main>
-    </div>
+    </AppShell>
   );
+}
+
+function StatTile({
+  label,
+  value,
+  unit,
+  accent,
+  href,
+}: {
+  label: string;
+  value: number;
+  unit: string;
+  accent?: boolean;
+  href?: string;
+}) {
+  const inner = (
+    <>
+      <p className="text-xs text-ink-300">{label}</p>
+      <p className="mt-1 font-display text-3xl font-bold leading-none">
+        <span className={accent ? "text-signal" : "text-ink-50"}>{value}</span>
+        <span className="ml-1 font-sans text-sm font-medium text-ink-300">
+          {unit}
+        </span>
+      </p>
+    </>
+  );
+  if (href) {
+    return (
+      <Link
+        href={href}
+        className="block rounded-2xl border border-booth-700 bg-booth-900 p-4 transition-colors hover:border-signal"
+      >
+        {inner}
+      </Link>
+    );
+  }
+  return <div className="rounded-2xl border border-booth-700 bg-booth-900 p-4">{inner}</div>;
 }

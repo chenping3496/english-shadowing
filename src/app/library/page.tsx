@@ -1,0 +1,305 @@
+"use client";
+
+import { useEffect, useRef, useState } from "react";
+import Link from "next/link";
+import AppShell from "@/components/AppShell";
+import { db } from "@/lib/db";
+import { parseSrt } from "@/lib/srt";
+import { segmentCues } from "@/lib/segment";
+import { createMaterialFromCues } from "@/lib/import";
+import { readAudioDuration } from "@/lib/import";
+import type { Material } from "@/lib/types";
+import type { TranscriptCue } from "@/app/api/transcript/route";
+
+type Tab = "local" | "youtube";
+type MaterialItem = Material & { sentenceCount: number };
+type YtResult = { title: string; cues: TranscriptCue[] };
+
+export default function Library() {
+  const [tab, setTab] = useState<Tab>("local");
+  const [materials, setMaterials] = useState<MaterialItem[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState("");
+
+  // 本地
+  const [title, setTitle] = useState("");
+  const [audioFile, setAudioFile] = useState<File | null>(null);
+  const [srtText, setSrtText] = useState("");
+  const srtInputRef = useRef<HTMLInputElement>(null);
+
+  // YouTube
+  const [ytUrl, setYtUrl] = useState("");
+  const [ytLoading, setYtLoading] = useState(false);
+  const [ytResult, setYtResult] = useState<YtResult | null>(null);
+  const [ytError, setYtError] = useState("");
+
+  async function reload() {
+    const [ms, ss] = await Promise.all([
+      db.materials.toArray(),
+      db.sentences.toArray(),
+    ]);
+    const counts = new Map<string, number>();
+    for (const s of ss)
+      counts.set(s.materialId, (counts.get(s.materialId) ?? 0) + 1);
+    setMaterials(
+      ms
+        .sort((a, b) => b.createdAt - a.createdAt)
+        .map((m) => ({ ...m, sentenceCount: counts.get(m.id) ?? 0 })),
+    );
+  }
+
+  useEffect(() => {
+    reload();
+  }, []);
+
+  async function handleSrtFile(file: File | null) {
+    if (!file) return;
+    setSrtText(await file.text());
+  }
+
+  async function handleLocalImport() {
+    if (!audioFile) return setMsg("请先选择音频/视频文件");
+    const cues = parseSrt(srtText);
+    if (!cues.length) return setMsg("请选择 .srt 字幕文件或粘贴字幕文本");
+    setBusy(true);
+    setMsg("");
+    try {
+      const durationSec = await readAudioDuration(audioFile);
+      const r = await createMaterialFromCues({
+        title: title || audioFile.name.replace(/\.[^.]+$/, ""),
+        type: "local",
+        audioBlob: audioFile,
+        durationSec,
+        cues,
+      });
+      setMsg(`已导入「${title || audioFile.name}」· ${r.sentenceCount} 句`);
+      setTitle("");
+      setAudioFile(null);
+      setSrtText("");
+      if (srtInputRef.current) srtInputRef.current.value = "";
+      await reload();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleYtFetch() {
+    if (!ytUrl.trim()) return;
+    setYtLoading(true);
+    setYtError("");
+    setYtResult(null);
+    try {
+      const res = await fetch("/api/transcript", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: ytUrl.trim() }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setYtError(data.error ?? "获取失败");
+        return;
+      }
+      setYtResult({ title: data.title ?? "YouTube 素材", cues: data.cues });
+    } catch {
+      setYtError("网络错误，请重试");
+    } finally {
+      setYtLoading(false);
+    }
+  }
+
+  async function handleYtImport() {
+    if (!ytResult?.cues.length) return;
+    setBusy(true);
+    setMsg("");
+    try {
+      const r = await createMaterialFromCues({
+        title: ytResult.title,
+        type: "youtube",
+        sourceUrl: ytUrl.trim(),
+        cues: ytResult.cues,
+      });
+      setMsg(`已导入「${ytResult.title}」· ${r.sentenceCount} 句`);
+      setYtUrl("");
+      setYtResult(null);
+      await reload();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const ytSentenceCount = ytResult ? segmentCues(ytResult.cues).length : 0;
+
+  return (
+    <AppShell>
+      <header className="px-5 pt-6 pb-3">
+        <h1 className="font-display text-xl font-semibold text-ink-50">素材库</h1>
+        <p className="mt-1 text-sm text-ink-300">导入英剧美剧片段，开始跟读</p>
+      </header>
+
+      {/* Tab 切换 */}
+      <div className="mx-5 flex rounded-full border border-booth-700 bg-booth-900 p-1">
+        {(
+          [
+            ["local", "本地导入"],
+            ["youtube", "YouTube 链接"],
+          ] as [Tab, string][]
+        ).map(([key, label]) => (
+          <button
+            key={key}
+            onClick={() => setTab(key)}
+            className={`flex-1 rounded-full py-2 text-sm transition-colors ${
+              tab === key
+                ? "bg-signal font-semibold text-booth-950"
+                : "text-ink-300 hover:text-ink-100"
+            }`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      <main className="space-y-4 px-5 pt-4">
+        {msg && (
+          <div className="rounded-xl border border-booth-700 bg-booth-800 px-4 py-3 text-sm text-good">
+            {msg}
+          </div>
+        )}
+
+        {tab === "local" ? (
+          <section className="space-y-4 rounded-2xl border border-booth-700 bg-booth-900 p-5">
+            <div>
+              <label className="mb-1.5 block text-xs text-ink-300">标题</label>
+              <input
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                placeholder="例如：老友记 S01E01"
+                className="w-full rounded-xl border border-booth-700 bg-booth-850 px-4 py-3 text-sm text-ink-50 placeholder:text-ink-500 focus:border-signal"
+              />
+            </div>
+
+            <div>
+              <label className="mb-1.5 block text-xs text-ink-300">
+                音频/视频文件
+              </label>
+              <input
+                type="file"
+                accept="audio/*,video/*"
+                onChange={(e) => setAudioFile(e.target.files?.[0] ?? null)}
+                className="w-full rounded-xl border border-booth-700 bg-booth-850 px-4 py-3 text-sm text-ink-300 file:mr-3 file:rounded-lg file:border-0 file:bg-booth-700 file:px-3 file:py-1.5 file:text-ink-100"
+              />
+              {audioFile && (
+                <p className="mt-1 text-xs text-ink-300">
+                  已选：{audioFile.name}
+                </p>
+              )}
+            </div>
+
+            <div>
+              <label className="mb-1.5 block text-xs text-ink-300">
+                字幕（.srt 文件或直接粘贴）
+              </label>
+              <input
+                ref={srtInputRef}
+                type="file"
+                accept=".srt,text/plain"
+                onChange={(e) => handleSrtFile(e.target.files?.[0] ?? null)}
+                className="w-full rounded-xl border border-booth-700 bg-booth-850 px-4 py-3 text-sm text-ink-300 file:mr-3 file:rounded-lg file:border-0 file:bg-booth-700 file:px-3 file:py-1.5 file:text-ink-100"
+              />
+              <textarea
+                value={srtText}
+                onChange={(e) => setSrtText(e.target.value)}
+                placeholder={"或粘贴 SRT 字幕…\n\n1\n00:00:00,000 --> 00:00:03,000\nHello there."}
+                rows={5}
+                className="mt-2 w-full rounded-xl border border-booth-700 bg-booth-850 px-4 py-3 font-mono text-xs text-ink-100 placeholder:text-ink-500 focus:border-signal"
+              />
+            </div>
+
+            <button
+              onClick={handleLocalImport}
+              disabled={busy}
+              className="h-11 w-full rounded-full bg-signal font-semibold text-booth-950 transition-colors hover:bg-signal-strong disabled:opacity-50"
+            >
+              {busy ? "导入中…" : "导入并切分"}
+            </button>
+          </section>
+        ) : (
+          <section className="space-y-4 rounded-2xl border border-booth-700 bg-booth-900 p-5">
+            <div>
+              <label className="mb-1.5 block text-xs text-ink-300">
+                YouTube 视频链接
+              </label>
+              <input
+                value={ytUrl}
+                onChange={(e) => setYtUrl(e.target.value)}
+                placeholder="https://www.youtube.com/watch?v=…"
+                className="w-full rounded-xl border border-booth-700 bg-booth-850 px-4 py-3 text-sm text-ink-50 placeholder:text-ink-500 focus:border-signal"
+              />
+            </div>
+
+            <button
+              onClick={handleYtFetch}
+              disabled={ytLoading || !ytUrl.trim()}
+              className="h-11 w-full rounded-full border border-signal font-semibold text-signal transition-colors hover:bg-signal-dim disabled:opacity-50"
+            >
+              {ytLoading ? "获取字幕中…" : "获取字幕"}
+            </button>
+
+            {ytError && (
+              <p className="rounded-xl border border-rec/30 bg-rec/10 px-4 py-3 text-sm text-rec">
+                {ytError}
+              </p>
+            )}
+
+            {ytResult && (
+              <div className="space-y-3">
+                <div className="rounded-xl border border-booth-700 bg-booth-850 p-4">
+                  <p className="text-sm font-semibold text-ink-50">
+                    {ytResult.title}
+                  </p>
+                  <p className="mt-1 font-mono text-xs text-ink-300">
+                    共 {ytResult.cues.length} 条字幕 · 约 {ytSentenceCount} 句
+                  </p>
+                </div>
+                <button
+                  onClick={handleYtImport}
+                  disabled={busy}
+                  className="h-11 w-full rounded-full bg-signal font-semibold text-booth-950 transition-colors hover:bg-signal-strong disabled:opacity-50"
+                >
+                  {busy ? "导入中…" : "导入到素材库"}
+                </button>
+              </div>
+            )}
+          </section>
+        )}
+
+        {/* 已有素材 */}
+        {materials.length > 0 && (
+          <section>
+            <h2 className="mb-2 text-xs font-medium text-ink-300">已有素材</h2>
+            <ul className="space-y-2">
+              {materials.map((m) => (
+                <li key={m.id}>
+                  <Link
+                    href={`/practice/${m.id}`}
+                    className="flex items-center justify-between rounded-2xl border border-booth-700 bg-booth-900 p-4 transition-colors hover:border-signal"
+                  >
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-semibold text-ink-50">
+                        {m.title}
+                      </p>
+                      <p className="mt-0.5 font-mono text-[11px] text-ink-300">
+                        {m.type === "youtube" ? "YouTube" : "本地"} ·{" "}
+                        {m.sentenceCount} 句
+                      </p>
+                    </div>
+                    <span className="text-signal">→</span>
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
+      </main>
+    </AppShell>
+  );
+}
