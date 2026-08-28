@@ -10,18 +10,8 @@ import { analyze, type Analysis } from "@/lib/score";
 import { speechSupported, startRecognition } from "@/lib/speech";
 import type { Material, Sentence } from "@/lib/types";
 
-function parseBiliId(input?: string): { key: "bvid" | "aid"; value: string } | null {
-  if (!input) return null;
-  const bv = input.match(/BV[0-9A-Za-z]{10}/i);
-  if (bv) return { key: "bvid", value: bv[0] };
-  const av = input.match(/\bav(\d+)/i);
-  if (av) return { key: "aid", value: av[1] };
-  const num = input.match(/^\d+$/);
-  if (num) return { key: "aid", value: num[0] };
-  return null;
-}
-
 type Phase = "idle" | "listening" | "scored";
+type MediaKind = "audio" | "video" | null;
 
 export default function PracticeClient({ materialId }: { materialId: string }) {
   const [material, setMaterial] = useState<Material | null>(null);
@@ -33,11 +23,12 @@ export default function PracticeClient({ materialId }: { materialId: string }) {
   const [result, setResult] = useState<Analysis | null>(null);
   const [error, setError] = useState("");
   const [doneScores, setDoneScores] = useState<number[]>([]);
-  const [audioUrl, setAudioUrl] = useState<string | null>(null);
+  const [mediaKind, setMediaKind] = useState<MediaKind>(null);
+  const [mediaSrc, setMediaSrc] = useState<string | null>(null);
+  const [mediaError, setMediaError] = useState("");
   const [playing, setPlaying] = useState(false);
-  const [biliPlay, setBiliPlay] = useState<{ t: number; nonce: number } | null>(null);
 
-  const audioRef = useRef<HTMLAudioElement>(null);
+  const mediaRef = useRef<HTMLMediaElement | null>(null);
   const endTimer = useRef<number | null>(null);
   const stopRef = useRef<(() => void) | null>(null);
   const finalRef = useRef("");
@@ -45,6 +36,10 @@ export default function PracticeClient({ materialId }: { materialId: string }) {
   const objectUrlRef = useRef<string | null>(null);
 
   const supported = speechSupported();
+
+  const setMediaRef = useCallback((el: HTMLMediaElement | null) => {
+    mediaRef.current = el;
+  }, []);
 
   useEffect(() => {
     (async () => {
@@ -63,13 +58,49 @@ export default function PracticeClient({ materialId }: { materialId: string }) {
     })();
   }, [materialId]);
 
+  // 本地素材：用 Blob 生成 object URL
   useEffect(() => {
     if (material?.audioBlob) {
       objectUrlRef.current = URL.createObjectURL(material.audioBlob);
-      setAudioUrl(objectUrlRef.current);
+      setMediaSrc(objectUrlRef.current);
+      setMediaKind("audio");
     }
     return () => {
       if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
+    };
+  }, [material]);
+
+  // B 站素材：进页拉一次可直接播放的 MP4 地址
+  useEffect(() => {
+    if (material?.type !== "bilibili") return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/bilibili/play", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ input: material.sourceUrl ?? "" }),
+        });
+        const data = await res.json();
+        if (!res.ok || !data.playUrl) {
+          if (!cancelled) {
+            setMediaError(data.error ?? "无法获取视频播放地址");
+            setMediaKind(null);
+          }
+          return;
+        }
+        if (cancelled) return;
+        setMediaSrc(data.playUrl);
+        setMediaKind("video");
+      } catch {
+        if (!cancelled) {
+          setMediaError("网络错误，无法获取视频");
+          setMediaKind(null);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
     };
   }, [material]);
 
@@ -82,18 +113,34 @@ export default function PracticeClient({ materialId }: { materialId: string }) {
 
   const sentence = sentences[idx];
 
-  const playSentence = useCallback(() => {
-    const a = audioRef.current;
-    if (!a || !audioUrl || !sentence) return;
-    a.currentTime = sentence.startSec;
-    void a.play();
-    setPlaying(true);
-    if (endTimer.current) clearTimeout(endTimer.current);
-    endTimer.current = window.setTimeout(() => {
-      a.pause();
-      setPlaying(false);
-    }, Math.max(600, (sentence.endSec - sentence.startSec) * 1000 + 300));
-  }, [audioUrl, sentence]);
+  const playSentence = () => {
+    const el = mediaRef.current;
+    const s = sentences[idx];
+    if (!el || !s) return;
+    const start = () => {
+      try {
+        el.currentTime = s.startSec;
+        setPlaying(true);
+        const p = el.play();
+        if (p) p.catch(() => setPlaying(false));
+        if (endTimer.current) clearTimeout(endTimer.current);
+        endTimer.current = window.setTimeout(() => {
+          el.pause();
+          setPlaying(false);
+        }, Math.max(600, (s.endSec - s.startSec) * 1000 + 300));
+      } catch {
+        setPlaying(false);
+      }
+    };
+    if (el.readyState >= 1) start();
+    else el.addEventListener("loadedmetadata", start, { once: true });
+  };
+
+  // 进入 / 切换句子时自动播放该句
+  useEffect(() => {
+    if (loaded && mediaKind) playSentence();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loaded, mediaKind, mediaSrc, idx]);
 
   const finalize = useCallback(async () => {
     if (!sentence) return;
@@ -154,6 +201,15 @@ export default function PracticeClient({ materialId }: { materialId: string }) {
     finalRef.current = "";
   }, [sentences.length]);
 
+  const repeatSentence = () => {
+    playSentence();
+    setPhase("idle");
+    setInterim("");
+    setResult(null);
+    setError("");
+    finalRef.current = "";
+  };
+
   if (!loaded) {
     return (
       <div className="px-5 pt-20 text-center text-sm text-ink-300">加载中…</div>
@@ -181,19 +237,6 @@ export default function PracticeClient({ materialId }: { materialId: string }) {
       </div>
     );
   }
-
-  const biliId = material.type === "bilibili" ? parseBiliId(material.sourceUrl) : null;
-  const biliBase = biliId
-    ? `https://player.bilibili.com/player.html?${biliId.key}=${biliId.value}&page=1&danmaku=0&high_quality=1`
-    : "";
-  const biliSrc =
-    biliId && biliPlay
-      ? `${biliBase}&t=${Math.floor(biliPlay.t)}&autoplay=1`
-      : biliBase;
-  const playBiliSentence = () => {
-    if (!biliId || !sentence) return;
-    setBiliPlay({ t: sentence.startSec, nonce: Date.now() });
-  };
 
   const finished = idx >= sentences.length - 1 && phase === "scored";
   const avg =
@@ -259,18 +302,18 @@ export default function PracticeClient({ materialId }: { materialId: string }) {
           </section>
         ) : (
           <section className="text-center">
-            {biliId && (
-              <div className="mb-6 aspect-video w-full overflow-hidden rounded-2xl border border-booth-700 bg-black">
-                <iframe
-                  key={biliPlay?.nonce ?? 0}
-                  src={biliSrc}
-                  title="Bilibili 播放器"
-                  className="h-full w-full"
-                  allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
-                  allowFullScreen
-                />
-              </div>
+            {/* B 站：显示视频画面 */}
+            {mediaKind === "video" && mediaSrc && (
+              <video
+                ref={setMediaRef}
+                src={mediaSrc}
+                className="mb-6 aspect-video w-full rounded-2xl border border-booth-700 bg-black"
+                controls
+                playsInline
+                onPause={() => setPlaying(false)}
+              />
             )}
+
             {/* 目标句 */}
             <p className="font-display text-2xl leading-relaxed text-ink-50">
               {sentence.text}
@@ -281,7 +324,7 @@ export default function PracticeClient({ materialId }: { materialId: string }) {
 
             {/* 播放 / 聆听区 */}
             <div className="mt-8 flex flex-col items-center gap-4">
-              {audioUrl ? (
+              {mediaKind ? (
                 <button
                   onClick={playSentence}
                   className={`flex h-16 w-16 items-center justify-center rounded-full border transition-colors ${
@@ -302,19 +345,11 @@ export default function PracticeClient({ materialId }: { materialId: string }) {
                     </svg>
                   )}
                 </button>
-              ) : biliId ? (
-                <button
-                  onClick={playBiliSentence}
-                  className="flex h-16 w-16 items-center justify-center rounded-full border border-booth-600 text-ink-100 transition-colors hover:border-signal"
-                  aria-label="播放本句视频"
-                >
-                  <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor">
-                    <path d="M7 5v14l12-7L7 5Z" />
-                  </svg>
-                </button>
+              ) : mediaError ? (
+                <p className="text-xs text-rec">{mediaError}</p>
               ) : (
                 <p className="text-xs text-ink-400">
-                  该素材无本地音频，直接朗读即可
+                  YouTube 素材无音视频，直接朗读即可
                 </p>
               )}
 
@@ -402,10 +437,10 @@ export default function PracticeClient({ materialId }: { materialId: string }) {
           {phase === "scored" ? (
             <>
               <button
-                onClick={startListening}
+                onClick={repeatSentence}
                 className="rounded-full border border-signal px-5 py-3 text-sm font-semibold text-signal hover:bg-signal-dim"
               >
-                重读
+                重复读
               </button>
               <button
                 onClick={() => goto(idx + 1)}
@@ -436,7 +471,15 @@ export default function PracticeClient({ materialId }: { materialId: string }) {
         </p>
       )}
 
-      <audio ref={audioRef} className="hidden" onPause={() => setPlaying(false)} />
+      {/* 本地音频：隐藏的 <audio> */}
+      {mediaKind === "audio" && (
+        <audio
+          ref={setMediaRef}
+          src={mediaSrc ?? undefined}
+          className="hidden"
+          onPause={() => setPlaying(false)}
+        />
+      )}
     </div>
   );
 }
