@@ -7,10 +7,10 @@ import { uid } from "@/lib/id";
 import { ensureSentenceCard } from "@/lib/cards";
 import { bumpSession } from "@/lib/stats";
 import { analyze, type Analysis } from "@/lib/score";
-import { speechSupported, startRecognition } from "@/lib/speech";
+import { recordingSupported, startRecording, audioExtFromMime } from "@/lib/recorder";
 import type { Material, Sentence } from "@/lib/types";
 
-type Phase = "idle" | "listening" | "scored";
+type Phase = "idle" | "recording" | "recognizing" | "scored";
 type MediaKind = "audio" | "video" | null;
 
 export default function PracticeClient({ materialId }: { materialId: string }) {
@@ -19,8 +19,8 @@ export default function PracticeClient({ materialId }: { materialId: string }) {
   const [loaded, setLoaded] = useState(false);
   const [idx, setIdx] = useState(0);
   const [phase, setPhase] = useState<Phase>("idle");
-  const [interim, setInterim] = useState("");
   const [result, setResult] = useState<Analysis | null>(null);
+  const [myAudioUrl, setMyAudioUrl] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [doneScores, setDoneScores] = useState<number[]>([]);
   const [mediaKind, setMediaKind] = useState<MediaKind>(null);
@@ -31,11 +31,11 @@ export default function PracticeClient({ materialId }: { materialId: string }) {
   const mediaRef = useRef<HTMLMediaElement | null>(null);
   const endTimer = useRef<number | null>(null);
   const stopRef = useRef<(() => void) | null>(null);
-  const finalRef = useRef("");
-  const errRef = useRef("");
   const objectUrlRef = useRef<string | null>(null);
+  const myAudioUrlRef = useRef<string | null>(null);
+  const myAudioRef = useRef<HTMLAudioElement | null>(null);
 
-  const supported = speechSupported();
+  const supported = recordingSupported();
 
   const setMediaRef = useCallback((el: HTMLMediaElement | null) => {
     mediaRef.current = el;
@@ -176,76 +176,108 @@ export default function PracticeClient({ materialId }: { materialId: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loaded, mediaKind, mediaSrc, idx]);
 
-  const finalize = useCallback(async () => {
-    if (!sentence) return;
-    const transcript = finalRef.current.trim();
-    // 有错误且无识别结果 → 回到待命，不评分
-    if (errRef.current && !transcript) {
-      setPhase("idle");
-      return;
-    }
-    const analysis = analyze(sentence.text, transcript);
-    setResult(analysis);
-    setPhase("scored");
-    setDoneScores((prev) => [...prev, analysis.score]);
-    try {
-      await db.attempts.add({
-        id: uid(),
-        sentenceId: sentence.id,
-        kind: "shadow",
-        target: sentence.text,
-        transcript,
-        score: analysis.score,
-        createdAt: Date.now(),
-      });
-      await ensureSentenceCard(sentence);
-      await bumpSession(analysis.score);
-    } catch {
-      // 记录失败不阻断流程
-    }
-  }, [sentence]);
+  // 录音结束 → 上传阿里 ASR 识别 → 评分 → 记录
+  const recognizeAndScore = useCallback(
+    async (blob: Blob) => {
+      if (!sentence) return;
+      setPhase("recognizing");
+      // 保存录音供「我的跟读」回放
+      if (myAudioUrlRef.current) URL.revokeObjectURL(myAudioUrlRef.current);
+      const url = URL.createObjectURL(blob);
+      myAudioUrlRef.current = url;
+      setMyAudioUrl(url);
+      setError("");
+      try {
+        const base64 = await new Promise<string>((resolve, reject) => {
+          const fr = new FileReader();
+          fr.onload = () =>
+            resolve((fr.result as string).split(",")[1] ?? "");
+          fr.onerror = () => reject(new Error("读取录音失败"));
+          fr.readAsDataURL(blob);
+        });
+        const res = await fetch("/api/asr", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            audio: base64,
+            ext: audioExtFromMime(blob.type),
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          setError(data.error ?? "识别失败");
+          setPhase("idle");
+          return;
+        }
+        const transcript = (data.text ?? "").trim();
+        if (!transcript) {
+          setError("没有识别到语音，请再试一次");
+          setPhase("idle");
+          return;
+        }
+        const analysis = analyze(sentence.text, transcript);
+        setResult(analysis);
+        setPhase("scored");
+        setDoneScores((prev) => [...prev, analysis.score]);
+        try {
+          await db.attempts.add({
+            id: uid(),
+            sentenceId: sentence.id,
+            kind: "shadow",
+            target: sentence.text,
+            transcript,
+            score: analysis.score,
+            createdAt: Date.now(),
+          });
+          await ensureSentenceCard(sentence);
+          await bumpSession(analysis.score);
+        } catch {
+          // 记录失败不阻断流程
+        }
+      } catch {
+        setError("网络错误，识别失败");
+        setPhase("idle");
+      }
+    },
+    [sentence],
+  );
 
   const startListening = useCallback(() => {
     if (!supported) return;
     setError("");
-    errRef.current = "";
-    finalRef.current = "";
-    setInterim("");
     setResult(null);
-    setPhase("listening");
-    stopRef.current = startRecognition({
-      onInterim: (t) => setInterim(t),
-      onFinal: (t) => {
-        finalRef.current = (finalRef.current + " " + t).trim();
+    setPhase("recording");
+    stopRef.current = startRecording(
+      {
+        onStop: (blob) => void recognizeAndScore(blob),
+        onError: (m) => {
+          setError(m);
+          setPhase("idle");
+        },
       },
-      onError: (m) => {
-        errRef.current = m;
-        setError(m);
-      },
-      onEnd: () => void finalize(),
-    });
-  }, [supported, finalize]);
+      30,
+    );
+  }, [supported, recognizeAndScore]);
 
   const stopListening = useCallback(() => {
     stopRef.current?.();
   }, []);
 
-  const goto = useCallback((next: number) => {
-    setIdx(Math.max(0, Math.min(sentences.length - 1, next)));
-    setPhase("idle");
-    setInterim("");
-    setResult(null);
-    setError("");
-    finalRef.current = "";
-  }, [sentences.length]);
+  const goto = useCallback(
+    (next: number) => {
+      setIdx(Math.max(0, Math.min(sentences.length - 1, next)));
+      setPhase("idle");
+      setResult(null);
+      setError("");
+    },
+    [sentences.length],
+  );
 
   const repeatSentence = () => {
     playSentence();
     setPhase("idle");
-    setInterim("");
     setResult(null);
     setError("");
-    finalRef.current = "";
   };
 
   if (!loaded) {
@@ -392,7 +424,7 @@ export default function PracticeClient({ materialId }: { materialId: string }) {
               )}
 
               {/* 波形 / 识别状态 */}
-              {phase === "listening" ? (
+              {phase === "recording" ? (
                 <div className="flex h-14 items-end gap-1">
                   {Array.from({ length: 20 }).map((_, i) => (
                     <span
@@ -404,6 +436,10 @@ export default function PracticeClient({ materialId }: { materialId: string }) {
                       }}
                     />
                   ))}
+                </div>
+              ) : phase === "recognizing" ? (
+                <div className="flex h-14 items-center justify-center">
+                  <p className="text-sm text-ink-300">识别中…</p>
                 </div>
               ) : phase === "scored" && result ? (
                 <div className="space-y-2">
@@ -425,14 +461,14 @@ export default function PracticeClient({ materialId }: { materialId: string }) {
               )}
             </div>
 
-            {/* 实时识别文本 */}
-            {phase === "listening" && (
+            {/* 录音提示 */}
+            {phase === "recording" && (
               <p className="mx-auto mt-4 min-h-6 max-w-sm text-sm text-ink-200">
-                {interim || "（正在听…请跟读）"}
+                正在录音…请跟读
               </p>
             )}
 
-            {error && phase !== "listening" && (
+            {error && phase !== "recording" && (
               <p className="mx-auto mt-4 max-w-sm text-sm text-rec">{error}</p>
             )}
 
@@ -454,6 +490,27 @@ export default function PracticeClient({ materialId }: { materialId: string }) {
                     你读的：{result.transcript}
                   </p>
                 )}
+                <div className="mt-3 flex gap-2 border-t border-booth-700 pt-3">
+                  <button
+                    onClick={playSentence}
+                    className="flex-1 rounded-full border border-booth-600 py-2 text-xs text-ink-200 hover:border-signal"
+                  >
+                    🔊 原句
+                  </button>
+                  <button
+                    onClick={() => {
+                      const el = myAudioRef.current;
+                      if (el) {
+                        el.currentTime = 0;
+                        void el.play();
+                      }
+                    }}
+                    disabled={!myAudioUrl}
+                    className="flex-1 rounded-full border border-signal py-2 text-xs font-semibold text-signal hover:bg-signal-dim disabled:opacity-40"
+                  >
+                    🎙 我的跟读
+                  </button>
+                </div>
               </div>
             )}
           </section>
@@ -487,7 +544,7 @@ export default function PracticeClient({ materialId }: { materialId: string }) {
                 下一句 →
               </button>
             </>
-          ) : phase === "listening" ? (
+          ) : phase === "recording" ? (
             <button
               onClick={stopListening}
               className="flex items-center gap-2 rounded-full border border-signal px-8 py-3 text-base font-semibold text-signal transition-colors hover:bg-signal-dim"
@@ -496,6 +553,13 @@ export default function PracticeClient({ materialId }: { materialId: string }) {
                 <rect x="6" y="6" width="12" height="12" rx="2" />
               </svg>
               结束录音
+            </button>
+          ) : phase === "recognizing" ? (
+            <button
+              disabled
+              className="flex items-center gap-2 rounded-full bg-signal px-8 py-3 text-base font-semibold text-booth-950 transition-colors disabled:opacity-50"
+            >
+              识别中…
             </button>
           ) : (
             <>
@@ -524,7 +588,7 @@ export default function PracticeClient({ materialId }: { materialId: string }) {
 
       {!supported && (
         <p className="mt-4 text-center text-xs text-warn">
-          当前浏览器不支持语音识别，建议使用 Chrome
+          当前浏览器不支持录音，请使用 Chrome 或 Safari
         </p>
       )}
 
@@ -537,6 +601,9 @@ export default function PracticeClient({ materialId }: { materialId: string }) {
           onPause={() => setPlaying(false)}
         />
       )}
+
+      {/* 我的跟读录音回放 */}
+      <audio ref={myAudioRef} src={myAudioUrl ?? undefined} className="hidden" />
     </div>
   );
 }
