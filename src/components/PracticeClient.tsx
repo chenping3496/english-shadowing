@@ -10,6 +10,17 @@ import { analyze, type Analysis } from "@/lib/score";
 import { speechSupported, startRecognition } from "@/lib/speech";
 import type { Material, Sentence } from "@/lib/types";
 
+function parseBiliId(input?: string): { key: "bvid" | "aid"; value: string } | null {
+  if (!input) return null;
+  const bv = input.match(/BV[0-9A-Za-z]{10}/i);
+  if (bv) return { key: "bvid", value: bv[0] };
+  const av = input.match(/\bav(\d+)/i);
+  if (av) return { key: "aid", value: av[1] };
+  const num = input.match(/^\d+$/);
+  if (num) return { key: "aid", value: num[0] };
+  return null;
+}
+
 type Phase = "idle" | "listening" | "scored";
 
 export default function PracticeClient({ materialId }: { materialId: string }) {
@@ -24,6 +35,7 @@ export default function PracticeClient({ materialId }: { materialId: string }) {
   const [doneScores, setDoneScores] = useState<number[]>([]);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
   const [playing, setPlaying] = useState(false);
+  const [biliPlay, setBiliPlay] = useState<{ t: number; nonce: number } | null>(null);
 
   const audioRef = useRef<HTMLAudioElement>(null);
   const endTimer = useRef<number | null>(null);
@@ -170,6 +182,19 @@ export default function PracticeClient({ materialId }: { materialId: string }) {
     );
   }
 
+  const biliId = material.type === "bilibili" ? parseBiliId(material.sourceUrl) : null;
+  const biliBase = biliId
+    ? `https://player.bilibili.com/player.html?${biliId.key}=${biliId.value}&page=1&danmaku=0&high_quality=1`
+    : "";
+  const biliSrc =
+    biliId && biliPlay
+      ? `${biliBase}&t=${Math.floor(biliPlay.t)}&autoplay=1`
+      : biliBase;
+  const playBiliSentence = () => {
+    if (!biliId || !sentence) return;
+    setBiliPlay({ t: sentence.startSec, nonce: Date.now() });
+  };
+
   const finished = idx >= sentences.length - 1 && phase === "scored";
   const avg =
     doneScores.length > 0
@@ -234,6 +259,18 @@ export default function PracticeClient({ materialId }: { materialId: string }) {
           </section>
         ) : (
           <section className="text-center">
+            {biliId && (
+              <div className="mb-6 aspect-video w-full overflow-hidden rounded-2xl border border-booth-700 bg-black">
+                <iframe
+                  key={biliPlay?.nonce ?? 0}
+                  src={biliSrc}
+                  title="Bilibili 播放器"
+                  className="h-full w-full"
+                  allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
+                  allowFullScreen
+                />
+              </div>
+            )}
             {/* 目标句 */}
             <p className="font-display text-2xl leading-relaxed text-ink-50">
               {sentence.text}
@@ -265,9 +302,19 @@ export default function PracticeClient({ materialId }: { materialId: string }) {
                     </svg>
                   )}
                 </button>
+              ) : biliId ? (
+                <button
+                  onClick={playBiliSentence}
+                  className="flex h-16 w-16 items-center justify-center rounded-full border border-booth-600 text-ink-100 transition-colors hover:border-signal"
+                  aria-label="播放本句视频"
+                >
+                  <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M7 5v14l12-7L7 5Z" />
+                  </svg>
+                </button>
               ) : (
                 <p className="text-xs text-ink-400">
-                  YouTube 素材无本地音频，直接朗读即可
+                  该素材无本地音频，直接朗读即可
                 </p>
               )}
 
