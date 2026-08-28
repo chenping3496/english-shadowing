@@ -8,6 +8,7 @@ const NAV = [
   { href: "/practice", label: "跟读", icon: Mic },
   { href: "/snap", label: "拍照", icon: Camera },
   { href: "/progress", label: "进度", icon: Chart },
+  { href: "/backup", label: "备份", icon: Backup },
 ] as const;
 
 export default function AppShell({
@@ -102,6 +103,26 @@ function Camera({ active }: { active: boolean }) {
       />
       <circle cx="12" cy="12.5" r="3.2" stroke="currentColor" strokeWidth="1.6" />
       {active && <circle cx="12" cy="12.5" r="1.2" fill="currentColor" />}
+    </svg>
+  );
+}
+
+function Backup({ active }: { active: boolean }) {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden>
+      <path
+        d="M12 4v10m0 0 4-4m-4 4-4-4"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M4 15v2.5A2.5 2.5 0 0 0 6.5 20h11a2.5 2.5 0 0 0 2.5-2.5V15"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+      />
     </svg>
   );
 }

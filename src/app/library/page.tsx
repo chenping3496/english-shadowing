@@ -11,9 +11,9 @@ import { readAudioDuration } from "@/lib/import";
 import type { Material } from "@/lib/types";
 import type { TranscriptCue } from "@/app/api/transcript/route";
 
-type Tab = "local" | "youtube";
+type Tab = "local" | "youtube" | "bilibili";
 type MaterialItem = Material & { sentenceCount: number };
-type YtResult = { title: string; cues: TranscriptCue[] };
+type FetchResult = { title: string; cues: TranscriptCue[]; lang?: string };
 
 export default function Library() {
   const [tab, setTab] = useState<Tab>("local");
@@ -30,8 +30,14 @@ export default function Library() {
   // YouTube
   const [ytUrl, setYtUrl] = useState("");
   const [ytLoading, setYtLoading] = useState(false);
-  const [ytResult, setYtResult] = useState<YtResult | null>(null);
+  const [ytResult, setYtResult] = useState<FetchResult | null>(null);
   const [ytError, setYtError] = useState("");
+
+  // Bilibili
+  const [biliUrl, setBiliUrl] = useState("");
+  const [biliLoading, setBiliLoading] = useState(false);
+  const [biliResult, setBiliResult] = useState<FetchResult | null>(null);
+  const [biliError, setBiliError] = useState("");
 
   async function reload() {
     const [ms, ss] = await Promise.all([
@@ -127,7 +133,56 @@ export default function Library() {
     }
   }
 
+  async function handleBiliFetch() {
+    if (!biliUrl.trim()) return;
+    setBiliLoading(true);
+    setBiliError("");
+    setBiliResult(null);
+    try {
+      const res = await fetch("/api/bilibili", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ input: biliUrl.trim() }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setBiliError(data.error ?? "获取失败");
+        return;
+      }
+      setBiliResult({
+        title: data.title ?? "Bilibili 素材",
+        cues: data.cues,
+        lang: data.lang,
+      });
+    } catch {
+      setBiliError("网络错误，请重试");
+    } finally {
+      setBiliLoading(false);
+    }
+  }
+
+  async function handleBiliImport() {
+    if (!biliResult?.cues.length) return;
+    setBusy(true);
+    setMsg("");
+    try {
+      const r = await createMaterialFromCues({
+        title: biliResult.title,
+        type: "bilibili",
+        sourceUrl: biliUrl.trim(),
+        cues: biliResult.cues,
+      });
+      setMsg(`已导入「${biliResult.title}」· ${r.sentenceCount} 句`);
+      setBiliUrl("");
+      setBiliResult(null);
+      await reload();
+    } finally {
+      setBusy(false);
+    }
+  }
+
   const ytSentenceCount = ytResult ? segmentCues(ytResult.cues).length : 0;
+  const biliSentenceCount = biliResult ? segmentCues(biliResult.cues).length : 0;
 
   return (
     <AppShell>
@@ -142,6 +197,7 @@ export default function Library() {
           [
             ["local", "本地导入"],
             ["youtube", "YouTube 链接"],
+            ["bilibili", "Bilibili 链接"],
           ] as [Tab, string][]
         ).map(([key, label]) => (
           <button
@@ -222,7 +278,7 @@ export default function Library() {
               {busy ? "导入中…" : "导入并切分"}
             </button>
           </section>
-        ) : (
+        ) : tab === "youtube" ? (
           <section className="space-y-4 rounded-2xl border border-booth-700 bg-booth-900 p-5">
             <div>
               <label className="mb-1.5 block text-xs text-ink-300">
@@ -270,6 +326,55 @@ export default function Library() {
               </div>
             )}
           </section>
+        ) : (
+          <section className="space-y-4 rounded-2xl border border-booth-700 bg-booth-900 p-5">
+            <div>
+              <label className="mb-1.5 block text-xs text-ink-300">
+                Bilibili 视频链接
+              </label>
+              <input
+                value={biliUrl}
+                onChange={(e) => setBiliUrl(e.target.value)}
+                placeholder="https://www.bilibili.com/video/BV… 或 BV 号"
+                className="w-full rounded-xl border border-booth-700 bg-booth-850 px-4 py-3 text-sm text-ink-50 placeholder:text-ink-500 focus:border-signal"
+              />
+            </div>
+
+            <button
+              onClick={handleBiliFetch}
+              disabled={biliLoading || !biliUrl.trim()}
+              className="h-11 w-full rounded-full border border-signal font-semibold text-signal transition-colors hover:bg-signal-dim disabled:opacity-50"
+            >
+              {biliLoading ? "获取字幕中…" : "获取字幕"}
+            </button>
+
+            {biliError && (
+              <p className="rounded-xl border border-rec/30 bg-rec/10 px-4 py-3 text-sm text-rec">
+                {biliError}
+              </p>
+            )}
+
+            {biliResult && (
+              <div className="space-y-3">
+                <div className="rounded-xl border border-booth-700 bg-booth-850 p-4">
+                  <p className="text-sm font-semibold text-ink-50">
+                    {biliResult.title}
+                  </p>
+                  <p className="mt-1 font-mono text-xs text-ink-300">
+                    {biliResult.lang ? `语种：${biliResult.lang} · ` : ""}
+                    共 {biliResult.cues.length} 条字幕 · 约 {biliSentenceCount} 句
+                  </p>
+                </div>
+                <button
+                  onClick={handleBiliImport}
+                  disabled={busy}
+                  className="h-11 w-full rounded-full bg-signal font-semibold text-booth-950 transition-colors hover:bg-signal-strong disabled:opacity-50"
+                >
+                  {busy ? "导入中…" : "导入到素材库"}
+                </button>
+              </div>
+            )}
+          </section>
         )}
 
         {/* 已有素材 */}
@@ -288,8 +393,12 @@ export default function Library() {
                         {m.title}
                       </p>
                       <p className="mt-0.5 font-mono text-[11px] text-ink-300">
-                        {m.type === "youtube" ? "YouTube" : "本地"} ·{" "}
-                        {m.sentenceCount} 句
+                        {(m.type === "youtube"
+                          ? "YouTube"
+                          : m.type === "bilibili"
+                            ? "Bilibili"
+                            : "本地")}{" "}
+                        · {m.sentenceCount} 句
                       </p>
                     </div>
                     <span className="text-signal">→</span>
