@@ -10,9 +10,10 @@ import type {
 
 const BACKUP_VERSION = 1;
 
-/** 素材里的 audioBlob 无法直接 JSON 序列化，导出时转 base64 */
-interface BackupMaterial extends Omit<Material, "audioBlob"> {
+/** 素材里的 Blob 无法直接 JSON 序列化，导出时转 base64 */
+interface BackupMaterial extends Omit<Material, "audioBlob" | "videoBlob"> {
   audioBlob?: { type: string; base64: string } | null;
+  videoBlob?: { type: string; base64: string } | null;
 }
 
 export interface BackupFile {
@@ -66,17 +67,21 @@ export async function buildBackup(): Promise<BackupFile> {
 
   const materialsOut: BackupMaterial[] = await Promise.all(
     materials.map(async (m) => {
-      const { audioBlob, ...rest } = m;
+      const { audioBlob, videoBlob, ...rest } = m;
+      const out: BackupMaterial = { ...rest };
       if (audioBlob) {
-        return {
-          ...rest,
-          audioBlob: {
-            type: audioBlob.type || "audio/mpeg",
-            base64: await blobToBase64(audioBlob),
-          },
+        out.audioBlob = {
+          type: audioBlob.type || "audio/mpeg",
+          base64: await blobToBase64(audioBlob),
         };
       }
-      return { ...rest };
+      if (videoBlob) {
+        out.videoBlob = {
+          type: videoBlob.type || "video/mp4",
+          base64: await blobToBase64(videoBlob),
+        };
+      }
+      return out;
     }),
   );
 
@@ -106,12 +111,18 @@ export async function restoreBackup(json: string): Promise<ImportResult> {
   }
 
   const materials: Material[] = (data.materials ?? []).map((m) => {
-    const { audioBlob, ...rest } = m;
+    const { audioBlob, videoBlob, ...rest } = m;
     const material = { ...rest } as Material;
     if (audioBlob && typeof audioBlob.base64 === "string") {
       material.audioBlob = base64ToBlob(
         audioBlob.base64,
         audioBlob.type || "audio/mpeg",
+      );
+    }
+    if (videoBlob && typeof videoBlob.base64 === "string") {
+      material.videoBlob = base64ToBlob(
+        videoBlob.base64,
+        videoBlob.type || "video/mp4",
       );
     }
     return material;

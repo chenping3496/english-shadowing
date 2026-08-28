@@ -6,8 +6,9 @@ export interface Material {
   id: string;
   type: MaterialType;
   title: string;
-  sourceUrl?: string; // YouTube 链接
+  sourceUrl?: string; // YouTube 链接 / Bilibili 视频页链接
   audioBlob?: Blob; // 本地音频/视频原始 Blob（持久化于 IndexedDB）
+  videoBlob?: Blob; // B 站视频缓存 Blob（首次练习时后台下载，之后本地播放）
   durationSec?: number;
   createdAt: number;
 }

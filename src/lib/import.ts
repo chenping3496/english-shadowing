@@ -28,7 +28,23 @@ export async function createMaterialFromCues(
     createdAt: Date.now(),
   };
 
-  const drafts = segmentCues(opts.cues);
+  // 时间戳校准：过滤非法项 → 按时间排序 → clamp 起止（保证区间可播放）
+  const cues = [...opts.cues]
+    .filter(
+      (c) =>
+        c &&
+        c.text?.trim() &&
+        Number.isFinite(c.startSec) &&
+        Number.isFinite(c.endSec),
+    )
+    .sort((a, b) => a.startSec - b.startSec)
+    .map((c) => {
+      const startSec = Math.max(0, c.startSec);
+      const endSec = Math.max(startSec + 0.3, c.endSec);
+      return { ...c, startSec, endSec };
+    });
+
+  const drafts = segmentCues(cues);
   const sentences: Sentence[] = drafts.map((d, i) => ({
     id: uid(),
     materialId,

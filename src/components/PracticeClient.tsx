@@ -70,10 +70,25 @@ export default function PracticeClient({ materialId }: { materialId: string }) {
     };
   }, [material]);
 
-  // B 站素材：进页拉一次可直接播放的 MP4 地址
+  // B 站素材：优先本地缓存，否则直连播放并后台下载缓存
   useEffect(() => {
     if (material?.type !== "bilibili") return;
     let cancelled = false;
+
+    // 已有本地缓存 → object URL 直接播（秒开、不过期、可离线）
+    if (material.videoBlob) {
+      const url = URL.createObjectURL(material.videoBlob);
+      objectUrlRef.current = url;
+      setMediaSrc(url);
+      setMediaKind("video");
+      setMediaError("");
+      return () => {
+        URL.revokeObjectURL(url);
+        if (objectUrlRef.current === url) objectUrlRef.current = null;
+      };
+    }
+
+    // 无缓存 → 先拿直连地址立即播放，再后台下载缓存（下次进页生效）
     (async () => {
       try {
         const res = await fetch("/api/bilibili/play", {
@@ -92,6 +107,24 @@ export default function PracticeClient({ materialId }: { materialId: string }) {
         if (cancelled) return;
         setMediaSrc(data.playUrl);
         setMediaKind("video");
+        setMediaError("");
+
+        // 后台下载缓存（失败/过大则保持在线播放，不影响本次练习）
+        try {
+          const dl = await fetch("/api/bilibili/download", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ input: material.sourceUrl ?? "" }),
+          });
+          if (dl.ok) {
+            const blob = await dl.blob();
+            if (!cancelled && blob.size > 0) {
+              await db.materials.update(material.id, { videoBlob: blob });
+            }
+          }
+        } catch {
+          // 缓存失败静默忽略，保留在线播放
+        }
       } catch {
         if (!cancelled) {
           setMediaError("网络错误，无法获取视频");
@@ -99,6 +132,7 @@ export default function PracticeClient({ materialId }: { materialId: string }) {
         }
       }
     })();
+
     return () => {
       cancelled = true;
     };
