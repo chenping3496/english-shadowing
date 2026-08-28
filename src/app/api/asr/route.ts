@@ -53,7 +53,7 @@ export async function POST(request: Request) {
       "-ar",
       "16000",
       "-b:a",
-      "64k",
+      "128k",
       mp3,
     ]);
 

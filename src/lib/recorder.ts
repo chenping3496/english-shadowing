@@ -76,7 +76,16 @@ export function startRecording(
   (async () => {
     let stream: MediaStream;
     try {
-      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      // 显式请求高质量：单声道 + 尽量 48kHz（用 ideal 避免设备不支持时直接 OverconstrainedError）
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          channelCount: 1,
+          sampleRate: { ideal: 48000 },
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+      });
     } catch (e) {
       cb.onError(
         e instanceof DOMException && e.name === "NotAllowedError"
@@ -91,10 +100,13 @@ export function startRecording(
     }
 
     const mime = pickMimeType();
+    // 128kbps：默认 opus 码率太低（约 20-32kbps）导致录音发糊，显式提码率
+    const recorderOpts: MediaRecorderOptions = { audioBitsPerSecond: 128000 };
+    if (mime) recorderOpts.mimeType = mime;
     try {
-      mediaRecorder = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+      mediaRecorder = new MediaRecorder(stream, recorderOpts);
     } catch {
-      mediaRecorder = new MediaRecorder(stream);
+      mediaRecorder = new MediaRecorder(stream, { audioBitsPerSecond: 128000 });
     }
 
     mediaRecorder.ondataavailable = (e) => {
