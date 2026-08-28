@@ -1,5 +1,5 @@
 // Shadowing Booth 离线 Service Worker（应用壳缓存）
-const CACHE = "booth-v1";
+const CACHE = "booth-v2";
 
 self.addEventListener("install", (e) => {
   self.skipWaiting();
