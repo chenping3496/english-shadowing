@@ -9,7 +9,19 @@ export interface BilibiliCue {
 
 interface ViewResp {
   code: number;
-  data?: { bvid?: string; aid?: number; cid?: number; title?: string };
+  data?: {
+    bvid?: string;
+    aid?: number;
+    cid?: number;
+    title?: string;
+    pages?: { cid?: number; page?: number; part?: string }[];
+  };
+}
+
+export interface BiliPage {
+  cid: number;
+  page: number;
+  part: string;
 }
 interface SubtitleTrack {
   lan?: string;
@@ -65,6 +77,9 @@ export async function POST(request: Request) {
   const bvid = view.data?.bvid;
   const aid = view.data?.aid;
   const cid = view.data?.cid;
+  const pages: BiliPage[] = (view.data?.pages ?? [])
+    .map((p) => ({ cid: p.cid ?? 0, page: p.page ?? 0, part: p.part ?? "" }))
+    .filter((p) => p.cid > 0);
 
   // 2. nav → WBI key（免登录）
   const { imgKey, subKey } = await getWbiKeys(headers);
@@ -87,12 +102,10 @@ export async function POST(request: Request) {
   }
 
   if (!subtitles.length) {
-    const hint = process.env.BILI_SESSDATA
-      ? ""
-      : "；且未配置 BILI_SESSDATA，字幕接口通常需要登录 cookie";
+    // 无独立字幕轨（多为烧录字幕）→ 返回分 P 列表，前端引导走 ASR 转写
     return NextResponse.json(
-      { error: `该视频没有可用的字幕${hint}` },
-      { status: 404 },
+      { title, subtitleAvailable: false, pages },
+      { status: 200 },
     );
   }
 
@@ -128,5 +141,5 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "字幕内容为空" }, { status: 422 });
   }
 
-  return NextResponse.json({ title, lang, cues });
+  return NextResponse.json({ title, lang, cues, subtitleAvailable: true, pages });
 }

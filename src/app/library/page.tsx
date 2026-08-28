@@ -14,6 +14,7 @@ import type { TranscriptCue } from "@/app/api/transcript/route";
 type Tab = "local" | "youtube" | "bilibili";
 type MaterialItem = Material & { sentenceCount: number };
 type FetchResult = { title: string; cues: TranscriptCue[]; lang?: string };
+type BiliPage = { cid: number; page: number; part: string };
 
 export default function Library() {
   const [tab, setTab] = useState<Tab>("local");
@@ -38,6 +39,10 @@ export default function Library() {
   const [biliLoading, setBiliLoading] = useState(false);
   const [biliResult, setBiliResult] = useState<FetchResult | null>(null);
   const [biliError, setBiliError] = useState("");
+  const [biliNoSubtitle, setBiliNoSubtitle] = useState(false);
+  const [biliPages, setBiliPages] = useState<BiliPage[]>([]);
+  const [biliSelectedPage, setBiliSelectedPage] = useState<number | null>(null);
+  const [biliTranscribing, setBiliTranscribing] = useState(false);
 
   async function reload() {
     const [ms, ss] = await Promise.all([
@@ -138,6 +143,9 @@ export default function Library() {
     setBiliLoading(true);
     setBiliError("");
     setBiliResult(null);
+    setBiliNoSubtitle(false);
+    setBiliPages([]);
+    setBiliSelectedPage(null);
     try {
       const res = await fetch("/api/bilibili", {
         method: "POST",
@@ -149,6 +157,13 @@ export default function Library() {
         setBiliError(data.error ?? "获取失败");
         return;
       }
+      if (data.subtitleAvailable === false) {
+        // 无独立字幕轨（烧录字幕）→ 进入选分 P + 转写流程
+        setBiliNoSubtitle(true);
+        setBiliPages(data.pages ?? []);
+        setBiliSelectedPage(data.pages?.[0]?.page ?? null);
+        return;
+      }
       setBiliResult({
         title: data.title ?? "Bilibili 素材",
         cues: data.cues,
@@ -158,6 +173,48 @@ export default function Library() {
       setBiliError("网络错误，请重试");
     } finally {
       setBiliLoading(false);
+    }
+  }
+
+  async function handleBiliTranscribe() {
+    if (biliSelectedPage == null) return;
+    const page = biliPages.find((p) => p.page === biliSelectedPage);
+    if (!page) return;
+    setBiliTranscribing(true);
+    setBiliError("");
+    try {
+      const res = await fetch("/api/bilibili/transcribe", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          input: biliUrl.trim(),
+          cid: page.cid,
+          part: page.part,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setBiliError(data.error ?? "转写失败");
+        return;
+      }
+      const cues = data.cues as TranscriptCue[];
+      const title = data.title ?? page.part;
+      const r = await createMaterialFromCues({
+        title,
+        type: "bilibili",
+        sourceUrl: biliUrl.trim(),
+        cues,
+      });
+      setMsg(`已转写导入「${title}」· ${r.sentenceCount} 句`);
+      setBiliUrl("");
+      setBiliNoSubtitle(false);
+      setBiliPages([]);
+      setBiliSelectedPage(null);
+      await reload();
+    } catch {
+      setBiliError("网络错误，转写失败");
+    } finally {
+      setBiliTranscribing(false);
     }
   }
 
@@ -371,6 +428,34 @@ export default function Library() {
                   className="h-11 w-full rounded-full bg-signal font-semibold text-booth-950 transition-colors hover:bg-signal-strong disabled:opacity-50"
                 >
                   {busy ? "导入中…" : "导入到素材库"}
+                </button>
+              </div>
+            )}
+
+            {biliNoSubtitle && (
+              <div className="space-y-3">
+                <p className="text-sm text-ink-300">
+                  该视频没有独立字幕（字幕烧录在画面里），需要语音转写。请选择要学习的一集：
+                </p>
+                {biliPages.length > 0 && (
+                  <select
+                    value={biliSelectedPage ?? ""}
+                    onChange={(e) => setBiliSelectedPage(Number(e.target.value))}
+                    className="w-full rounded-xl border border-booth-700 bg-booth-850 px-4 py-3 text-sm text-ink-50 focus:border-signal"
+                  >
+                    {biliPages.map((p) => (
+                      <option key={p.cid} value={p.page}>
+                        {p.part}
+                      </option>
+                    ))}
+                  </select>
+                )}
+                <button
+                  onClick={handleBiliTranscribe}
+                  disabled={biliTranscribing || biliSelectedPage == null}
+                  className="h-11 w-full rounded-full bg-signal font-semibold text-booth-950 transition-colors hover:bg-signal-strong disabled:opacity-50"
+                >
+                  {biliTranscribing ? "转写中…（约 30 秒）" : "转写并导入"}
                 </button>
               </div>
             )}
