@@ -8,6 +8,7 @@ import { parseSrt } from "@/lib/srt";
 import { segmentCues } from "@/lib/segment";
 import { createMaterialFromCues } from "@/lib/import";
 import { readAudioDuration } from "@/lib/import";
+import { deleteMaterials } from "@/lib/materials";
 import type { Material } from "@/lib/types";
 import type { TranscriptCue } from "@/app/api/transcript/route";
 
@@ -43,6 +44,10 @@ export default function Library() {
   const [biliPages, setBiliPages] = useState<BiliPage[]>([]);
   const [biliSelectedPage, setBiliSelectedPage] = useState<number | null>(null);
   const [biliTranscribing, setBiliTranscribing] = useState(false);
+
+  // 素材管理（多选删除）
+  const [managing, setManaging] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
 
   async function reload() {
     const [ms, ss] = await Promise.all([
@@ -232,6 +237,41 @@ export default function Library() {
       setMsg(`已导入「${biliResult.title}」· ${r.sentenceCount} 句`);
       setBiliUrl("");
       setBiliResult(null);
+      await reload();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function toggleSelect(id: string) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function toggleManage() {
+    setManaging((m) => !m);
+    setSelected(new Set());
+  }
+
+  async function confirmDelete(ids: string[]) {
+    if (!ids.length) return;
+    if (
+      !window.confirm(
+        `确定删除 ${ids.length} 个素材？其句子、复习卡与练习记录将一并删除，不可恢复。`,
+      )
+    )
+      return;
+    setBusy(true);
+    setMsg("");
+    try {
+      await deleteMaterials(ids);
+      setMsg(`已删除 ${ids.length} 个素材`);
+      setSelected(new Set());
+      if (ids.length === 1) setManaging(false);
       await reload();
     } finally {
       setBusy(false);
@@ -465,32 +505,118 @@ export default function Library() {
         {/* 已有素材 */}
         {materials.length > 0 && (
           <section>
-            <h2 className="mb-2 text-xs font-medium text-ink-300">已有素材</h2>
+            <div className="mb-2 flex items-center justify-between">
+              <h2 className="text-xs font-medium text-ink-300">已有素材</h2>
+              <button
+                onClick={toggleManage}
+                className="text-xs font-medium text-signal hover:text-signal-strong"
+              >
+                {managing ? "完成" : "管理"}
+              </button>
+            </div>
             <ul className="space-y-2">
-              {materials.map((m) => (
-                <li key={m.id}>
-                  <Link
-                    href={`/practice/${m.id}`}
-                    className="flex items-center justify-between rounded-2xl border border-booth-700 bg-booth-900 p-4 transition-colors hover:border-signal"
-                  >
-                    <div className="min-w-0">
-                      <p className="truncate text-sm font-semibold text-ink-50">
-                        {m.title}
-                      </p>
-                      <p className="mt-0.5 font-mono text-[11px] text-ink-300">
-                        {(m.type === "youtube"
-                          ? "YouTube"
-                          : m.type === "bilibili"
-                            ? "Bilibili"
-                            : "本地")}{" "}
-                        · {m.sentenceCount} 句
-                      </p>
-                    </div>
-                    <span className="text-signal">→</span>
-                  </Link>
-                </li>
-              ))}
+              {materials.map((m) => {
+                const typeLabel =
+                  m.type === "youtube"
+                    ? "YouTube"
+                    : m.type === "bilibili"
+                      ? "Bilibili"
+                      : "本地";
+                const isSel = selected.has(m.id);
+                return (
+                  <li key={m.id} className="flex items-center gap-2">
+                    {managing ? (
+                      <button
+                        onClick={() => toggleSelect(m.id)}
+                        className={`flex min-w-0 flex-1 items-center gap-3 rounded-2xl border p-4 text-left transition-colors ${
+                          isSel
+                            ? "border-signal bg-signal-dim"
+                            : "border-booth-700 bg-booth-900"
+                        }`}
+                      >
+                        <span
+                          className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full border ${
+                            isSel ? "border-signal bg-signal" : "border-booth-600"
+                          }`}
+                        >
+                          {isSel && (
+                            <svg
+                              width="12"
+                              height="12"
+                              viewBox="0 0 24 24"
+                              fill="none"
+                              stroke="currentColor"
+                              strokeWidth="3"
+                            >
+                              <path
+                                d="M5 13l4 4L19 7"
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                              />
+                            </svg>
+                          )}
+                        </span>
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-semibold text-ink-50">
+                            {m.title}
+                          </p>
+                          <p className="mt-0.5 font-mono text-[11px] text-ink-300">
+                            {typeLabel} · {m.sentenceCount} 句
+                          </p>
+                        </div>
+                      </button>
+                    ) : (
+                      <>
+                        <Link
+                          href={`/practice/${m.id}`}
+                          className="flex min-w-0 flex-1 items-center justify-between rounded-2xl border border-booth-700 bg-booth-900 p-4 transition-colors hover:border-signal"
+                        >
+                          <div className="min-w-0">
+                            <p className="truncate text-sm font-semibold text-ink-50">
+                              {m.title}
+                            </p>
+                            <p className="mt-0.5 font-mono text-[11px] text-ink-300">
+                              {typeLabel} · {m.sentenceCount} 句
+                            </p>
+                          </div>
+                          <span className="text-signal">→</span>
+                        </Link>
+                        <button
+                          onClick={() => confirmDelete([m.id])}
+                          aria-label="删除素材"
+                          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-booth-700 text-ink-400 transition-colors hover:border-rec hover:text-rec"
+                        >
+                          <svg
+                            width="16"
+                            height="16"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="2"
+                          >
+                            <path
+                              d="M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                            />
+                          </svg>
+                        </button>
+                      </>
+                    )}
+                  </li>
+                );
+              })}
             </ul>
+
+            {managing && (
+              <button
+                onClick={() => confirmDelete([...selected])}
+                disabled={selected.size === 0}
+                className="mt-3 h-11 w-full rounded-full bg-rec font-semibold text-white transition-colors hover:opacity-90 disabled:opacity-40"
+              >
+                删除选中{selected.size > 0 ? `（${selected.size}）` : ""}
+              </button>
+            )}
           </section>
         )}
       </main>

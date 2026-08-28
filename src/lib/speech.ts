@@ -35,7 +35,7 @@ export function startRecognition(cb: SpeechCallbacks): (() => void) | null {
   const rec = new SR();
   rec.lang = "en-US";
   rec.interimResults = true;
-  rec.continuous = false;
+  rec.continuous = true; // 持续听，直到手动「结束录音」才停
   rec.maxAlternatives = 1;
 
   rec.onresult = (e: SpeechRecognitionEvent) => {

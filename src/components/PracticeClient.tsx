@@ -226,6 +226,10 @@ export default function PracticeClient({ materialId }: { materialId: string }) {
     });
   }, [supported, finalize]);
 
+  const stopListening = useCallback(() => {
+    stopRef.current?.();
+  }, []);
+
   const goto = useCallback((next: number) => {
     setIdx(Math.max(0, Math.min(sentences.length - 1, next)));
     setPhase("idle");
@@ -485,14 +489,13 @@ export default function PracticeClient({ materialId }: { materialId: string }) {
             </>
           ) : phase === "listening" ? (
             <button
-              disabled
-              className="flex items-center gap-2 rounded-full bg-signal px-8 py-3 text-base font-semibold text-booth-950 transition-colors disabled:opacity-50"
+              onClick={stopListening}
+              className="flex items-center gap-2 rounded-full border border-signal px-8 py-3 text-base font-semibold text-signal transition-colors hover:bg-signal-dim"
             >
               <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
-                <rect x="9" y="3" width="6" height="12" rx="3" />
-                <path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v3" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+                <rect x="6" y="6" width="12" height="12" rx="2" />
               </svg>
-              听你读…
+              结束录音
             </button>
           ) : (
             <>
