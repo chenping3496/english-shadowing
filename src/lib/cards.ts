@@ -21,34 +21,47 @@ export async function ensureSentenceCard(sentence: Sentence): Promise<void> {
   await db.cards.add(card);
 }
 
-/** 把识物结果加入 SRS（生词卡，去重），返回新增数量 */
-export async function addRecognitionCards(
-  objects: RecognitionObject[],
-): Promise<number> {
-  const existing = new Set(
-    (await db.cards.filter((c) => c.kind === "pronunciation").toArray()).map(
-      (c) => c.text,
-    ),
-  );
-  let added = 0;
-  for (const o of objects) {
-    const text = o.english.trim();
-    if (!text || existing.has(text)) continue;
-    const card: Card = {
-      id: uid(),
-      kind: "pronunciation",
-      text,
-      chinese: o.chinese,
-      phrase: o.phrase,
-      hint: o.chinese,
-      srs: newSrsState(),
-      createdAt: Date.now(),
-    };
-    await db.cards.add(card);
-    existing.add(text);
-    added++;
-  }
-  return added;
+/** 把单个识物结果加入生词本（发音卡，去重），关联拍照记录以便复习调出整图。返回是否新增。 */
+export async function addRecognitionCard(
+  o: RecognitionObject,
+  recognitionId: string,
+): Promise<boolean> {
+  const text = o.english.trim();
+  if (!text) return false;
+  const existing = await db.cards
+    .filter((c) => c.kind === "pronunciation" && c.text === text)
+    .first();
+  if (existing) return false;
+  const card: Card = {
+    id: uid(),
+    kind: "pronunciation",
+    text,
+    chinese: o.chinese,
+    phrase: o.phrase,
+    phraseChinese: o.phraseChinese,
+    recognitionId,
+    hint: o.chinese,
+    srs: newSrsState(),
+    createdAt: Date.now(),
+  };
+  await db.cards.add(card);
+  return true;
+}
+
+/** 取消生词本里的一个识物词（按英文词删除发音卡）。 */
+export async function removeRecognitionCard(text: string): Promise<void> {
+  const card = await db.cards
+    .filter((c) => c.kind === "pronunciation" && c.text === text)
+    .first();
+  if (card) await db.cards.delete(card.id);
+}
+
+/** 查一组英文词里，哪些已经在生词本（发音卡）中。 */
+export async function getExistingWordSet(words: string[]): Promise<Set<string>> {
+  const want = new Set(words.map((w) => w.trim()).filter(Boolean));
+  if (!want.size) return new Set();
+  const all = await db.cards.filter((c) => c.kind === "pronunciation").toArray();
+  return new Set(all.filter((c) => want.has(c.text)).map((c) => c.text));
 }
 
 /** 把跟读/复述读错的词生成发音卡（kind=pronunciation，去重），返回实际新增的词 */

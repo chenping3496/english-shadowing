@@ -4,8 +4,12 @@ import { useEffect, useRef, useState } from "react";
 import AppShell from "@/components/AppShell";
 import { db } from "@/lib/db";
 import { uid } from "@/lib/id";
-import { addRecognitionCards, addMissedWordCards } from "@/lib/cards";
-import { analyze, extractMissedWords, type Analysis } from "@/lib/score";
+import {
+  addRecognitionCard,
+  removeRecognitionCard,
+  getExistingWordSet,
+} from "@/lib/cards";
+import { analyze, type Analysis } from "@/lib/score";
 import {
   recordingSupported,
   startRecording,
@@ -29,22 +33,28 @@ export default function Snap() {
   const [loading, setLoading] = useState(false);
   const [objects, setObjects] = useState<VisionObject[]>([]);
   const [error, setError] = useState("");
-  const [saved, setSaved] = useState(false);
-  const [added, setAdded] = useState(0);
   const [history, setHistory] = useState<Recognition[]>([]);
   const [viewingHistory, setViewingHistory] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // 跟读状态（优化：识物结果 → 听 → 说 → 错词进 SRS）
+  // 当前结果对应的拍照记录 id（加入生词本时用它关联整图）
+  const [currentRecognitionId, setCurrentRecognitionId] = useState<string | null>(
+    null,
+  );
+  // 当前结果里已在生词本的英文词
+  const [addedWords, setAddedWords] = useState<string[]>([]);
+  // 展开的卡片
+  const [expandedIdx, setExpandedIdx] = useState<number | null>(null);
+
+  // 跟读状态（单词 / 短语分开跟读）
   const [activeIdx, setActiveIdx] = useState<number | null>(null);
+  const [shadowTarget, setShadowTarget] = useState("");
   const [phase, setPhase] = useState<Phase>("idle");
   const [result, setResult] = useState<Analysis | null>(null);
-  const [newCards, setNewCards] = useState<string[]>([]);
   const stopRef = useRef<(() => void) | null>(null);
 
   const supported = recordingSupported();
 
-  // 历史记录：每次识别成功都存一条（含缩略图 + 去重哈希），可随时回看
   function refreshHistory() {
     db.recognitions
       .orderBy("createdAt")
@@ -58,20 +68,30 @@ export default function Snap() {
     refreshHistory();
   }, []);
 
+  async function syncAddedWords(objs: VisionObject[]) {
+    try {
+      const set = await getExistingWordSet(objs.map((o) => o.english));
+      setAddedWords([...set]);
+    } catch {
+      // 忽略
+    }
+  }
+
   function resetShadow() {
     setActiveIdx(null);
+    setShadowTarget("");
     setPhase("idle");
     setResult(null);
-    setNewCards([]);
   }
 
   function handleFile(file: File | null) {
     if (!file) return;
-    setSaved(false);
     setObjects([]);
     setError("");
-    setAdded(0);
+    setCurrentRecognitionId(null);
+    setAddedWords([]);
     resetShadow();
+    setViewingHistory(null);
     const reader = new FileReader();
     reader.onload = () => setImage(reader.result as string);
     reader.readAsDataURL(file);
@@ -82,8 +102,8 @@ export default function Snap() {
     setLoading(true);
     setError("");
     setObjects([]);
-    setSaved(false);
-    setAdded(0);
+    setCurrentRecognitionId(null);
+    setAddedWords([]);
     resetShadow();
     setViewingHistory(null);
     try {
@@ -94,7 +114,9 @@ export default function Snap() {
         .first();
       if (cached) {
         setObjects(cached.objects);
+        setCurrentRecognitionId(cached.id);
         setViewingHistory(`${formatTime(cached.createdAt)} · 已缓存，未重复识别`);
+        void syncAddedWords(cached.objects);
         return;
       }
       const res = await fetch("/api/vision", {
@@ -109,9 +131,11 @@ export default function Snap() {
       }
       const objs: VisionObject[] = data.objects ?? [];
       setObjects(objs);
+      const rid = uid();
+      setCurrentRecognitionId(rid);
+      void syncAddedWords(objs);
       // 存历史（含去重哈希）；缩略图失败不影响历史与缓存
       try {
-        const rid = uid();
         await db.recognitions.add({
           id: rid,
           objects: objs,
@@ -120,7 +144,7 @@ export default function Snap() {
         });
         refreshHistory();
         try {
-          const thumb = await makeThumb(image, 320);
+          const thumb = await makeThumb(image);
           await db.recognitions.update(rid, { imageThumb: thumb });
           refreshHistory();
         } catch {
@@ -138,27 +162,28 @@ export default function Snap() {
 
   function openHistory(r: Recognition) {
     setObjects(r.objects);
+    setCurrentRecognitionId(r.id);
     setViewingHistory(`${formatTime(r.createdAt)} · 历史记录`);
-    setSaved(false);
-    setAdded(0);
     setError("");
     resetShadow();
+    void syncAddedWords(r.objects);
   }
 
-  async function saveToReview() {
-    if (!objects.length) return;
-    const n = await addRecognitionCards(objects);
-    setAdded(n);
-    setSaved(true);
+  async function toggleWord(o: VisionObject) {
+    const text = o.english;
+    if (addedWords.includes(text)) {
+      await removeRecognitionCard(text);
+      setAddedWords((w) => w.filter((x) => x !== text));
+    } else {
+      if (currentRecognitionId) {
+        await addRecognitionCard(o, currentRecognitionId);
+      }
+      setAddedWords((w) => (w.includes(text) ? w : [...w, text]));
+    }
   }
-
-  const target =
-    activeIdx != null
-      ? objects[activeIdx]?.phrase || objects[activeIdx]?.english || ""
-      : "";
 
   async function recognizeShadow(blob: Blob) {
-    if (activeIdx == null || !target) return;
+    if (activeIdx == null || !shadowTarget) return;
     setPhase("recognizing");
     setError("");
     try {
@@ -185,27 +210,19 @@ export default function Snap() {
         setPhase("idle");
         return;
       }
-      const a = analyze(target, transcript);
-      const missed = extractMissedWords(a.tokens);
-      setResult(a);
+      setResult(analyze(shadowTarget, transcript));
       setPhase("scored");
-      try {
-        const addedWords = await addMissedWordCards(missed, target);
-        if (addedWords.length > 0) setNewCards(addedWords);
-      } catch {
-        // 记录失败不阻断流程
-      }
     } catch {
       setError("网络错误，识别失败");
       setPhase("idle");
     }
   }
 
-  function startShadow(idx: number) {
+  function startShadow(idx: number, text: string) {
     stopRef.current?.(); // 停掉上一个未结束的录音
     setActiveIdx(idx);
+    setShadowTarget(text);
     setResult(null);
-    setNewCards([]);
     setError("");
     setPhase("preparing");
     stopRef.current = startRecording(
@@ -217,18 +234,19 @@ export default function Snap() {
         },
         onReady: () => setPhase("recording"),
       },
-      15, // 短语较短，15 秒足够
+      15, // 单词/短语较短，15 秒足够
     );
   }
 
-  const shadowBusy = phase === "preparing" || phase === "recording" || phase === "recognizing";
+  const shadowBusy =
+    phase === "preparing" || phase === "recording" || phase === "recognizing";
 
   return (
     <AppShell>
       <header className="px-5 pt-6 pb-3">
         <h1 className="font-display text-xl font-semibold text-ink-50">拍照识物</h1>
         <p className="mt-1 text-sm text-ink-300">
-          拍下身边事物，听一遍、跟读一遍，把它说出口
+          拍下身边事物，点开听一遍、跟读一遍；挑想学的词加进生词本
         </p>
       </header>
 
@@ -291,12 +309,6 @@ export default function Snap() {
           </div>
         )}
 
-        {saved && (
-          <div className="rounded-xl border border-booth-700 bg-booth-800 px-4 py-3 text-sm text-good">
-            已加入 {added} 张生词卡到复习队列
-          </div>
-        )}
-
         {/* 识别结果 */}
         {objects.length > 0 && (
           <section className="space-y-2">
@@ -305,94 +317,151 @@ export default function Snap() {
                 {viewingHistory}
               </p>
             )}
-            <div className="flex items-center justify-between">
-              <h2 className="text-xs font-medium text-ink-300">识别结果 · 点 🔊 听，点 🎙 跟读</h2>
-              <button
-                onClick={saveToReview}
-                className="rounded-full border border-signal px-4 py-1.5 text-xs font-semibold text-signal hover:bg-signal-dim"
-              >
-                加入复习
-              </button>
-            </div>
+            <h2 className="text-xs font-medium text-ink-300">
+              点开听读 · ＋生词本挑词复习
+            </h2>
             <ul className="space-y-2">
               {objects.map((o, i) => {
+                const expanded = expandedIdx === i;
                 const isActive = activeIdx === i;
-                const phrase = o.phrase || o.english;
+                const wordAdded = addedWords.includes(o.english);
+                const phrase = o.phrase || "";
                 return (
                   <li
                     key={i}
-                    className="rounded-xl border border-booth-700 bg-booth-900 px-4 py-3"
+                    className="rounded-xl border border-booth-700 bg-booth-900"
                   >
-                    <div className="flex items-baseline justify-between">
-                      <span className="font-display text-base font-semibold text-ink-50">
-                        {o.english}
-                      </span>
-                      <span className="text-sm text-ink-300">{o.chinese}</span>
-                    </div>
-                    {o.phrase && (
-                      <p className="mt-1 font-mono text-xs text-signal">
-                        “{o.phrase}”
-                      </p>
-                    )}
-
-                    <div className="mt-2 flex gap-2">
+                    {/* 头部：中英文 + 生词本 + 展开 */}
+                    <div className="flex items-center gap-2 px-4 py-3">
                       <button
-                        onClick={() => void speak(phrase)}
-                        className="flex-1 rounded-full border border-booth-600 py-1.5 text-xs text-ink-200 hover:border-signal"
+                        onClick={() => setExpandedIdx(expanded ? null : i)}
+                        className="flex flex-1 items-baseline gap-3 text-left"
                       >
-                        🔊 听
+                        <span className="font-display text-base font-semibold text-ink-50">
+                          {o.english}
+                        </span>
+                        <span className="text-sm text-ink-300">{o.chinese}</span>
                       </button>
                       <button
-                        onClick={() => {
-                          if (isActive && phase === "recording") {
-                            stopRef.current?.();
-                          } else {
-                            startShadow(i);
-                          }
-                        }}
-                        disabled={
-                          !supported ||
-                          (shadowBusy && !(isActive && phase === "recording"))
-                        }
-                        className="flex-1 rounded-full border border-signal py-1.5 text-xs font-semibold text-signal hover:bg-signal-dim disabled:opacity-40"
+                        onClick={() => void toggleWord(o)}
+                        className={`shrink-0 rounded-full border px-3 py-1 text-xs font-semibold transition-colors ${
+                          wordAdded
+                            ? "border-good/50 bg-good/10 text-good"
+                            : "border-booth-600 text-ink-300 hover:border-signal hover:text-signal"
+                        }`}
                       >
-                        {isActive && phase === "recording" ? "■ 结束" : "🎙 跟读"}
+                        {wordAdded ? "已加入 ✓" : "＋生词本"}
+                      </button>
+                      <button
+                        onClick={() => setExpandedIdx(expanded ? null : i)}
+                        className="shrink-0 px-1 text-ink-400"
+                        aria-label={expanded ? "收起" : "展开"}
+                      >
+                        {expanded ? "▴" : "▾"}
                       </button>
                     </div>
 
-                    {/* 跟读状态 / 评分 */}
-                    {isActive && shadowBusy && (
-                      <p className="mt-2 text-xs text-ink-300">
-                        {phase === "preparing"
-                          ? "准备中…"
-                          : phase === "recording"
-                            ? "正在录音…请跟读"
-                            : "识别中…"}
-                      </p>
-                    )}
-                    {isActive && phase === "scored" && result && (
-                      <div className="mt-2 space-y-1 border-t border-booth-700 pt-2 text-xs">
-                        <p>
-                          得分{" "}
-                          <span
-                            className={`font-display text-sm font-bold ${
-                              result.score >= 85
-                                ? "text-good"
-                                : result.score >= 60
-                                  ? "text-warn"
-                                  : "text-rec"
-                            }`}
-                          >
-                            {result.score}
+                    {/* 展开区：单词 / 短语 分别听 + 跟读 */}
+                    {expanded && (
+                      <div className="space-y-3 border-t border-booth-800 px-4 py-3">
+                        {/* 单词 */}
+                        <div className="flex items-center gap-2">
+                          <span className="w-10 shrink-0 text-xs text-ink-400">单词</span>
+                          <span className="flex-1 font-display text-sm text-ink-50">
+                            {o.english}
                           </span>
-                          {result.transcript && (
-                            <span className="text-ink-400"> · 你读的：{result.transcript}</span>
-                          )}
-                        </p>
-                        {newCards.length > 0 && (
-                          <p className="text-warn">
-                            已把 {newCards.length} 个读错的词加入复习卡：{newCards.join("、")}
+                          <button
+                            onClick={() => void speak(o.english)}
+                            className="rounded-full border border-booth-600 px-3 py-1 text-xs text-ink-200 hover:border-signal"
+                          >
+                            🔊
+                          </button>
+                          <button
+                            onClick={() =>
+                              isActive && phase === "recording"
+                                ? stopRef.current?.()
+                                : startShadow(i, o.english)
+                            }
+                            disabled={
+                              !supported ||
+                              (shadowBusy && !(isActive && phase === "recording"))
+                            }
+                            className="rounded-full border border-signal px-3 py-1 text-xs font-semibold text-signal hover:bg-signal-dim disabled:opacity-40"
+                          >
+                            {isActive && phase === "recording" ? "■" : "🎙"}
+                          </button>
+                        </div>
+
+                        {/* 短语 */}
+                        {phrase && (
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <span className="w-10 shrink-0 text-xs text-ink-400">短语</span>
+                              <span className="flex-1 font-mono text-sm text-signal">
+                                “{phrase}”
+                              </span>
+                              <button
+                                onClick={() => void speak(phrase)}
+                                className="rounded-full border border-booth-600 px-3 py-1 text-xs text-ink-200 hover:border-signal"
+                              >
+                                🔊
+                              </button>
+                              <button
+                                onClick={() =>
+                                  isActive && phase === "recording"
+                                    ? stopRef.current?.()
+                                    : startShadow(i, phrase)
+                                }
+                                disabled={
+                                  !supported ||
+                                  (shadowBusy && !(isActive && phase === "recording"))
+                                }
+                                className="rounded-full border border-signal px-3 py-1 text-xs font-semibold text-signal hover:bg-signal-dim disabled:opacity-40"
+                              >
+                                {isActive && phase === "recording" ? "■" : "🎙"}
+                              </button>
+                            </div>
+                            {o.phraseChinese && (
+                              <p className="mt-1 pl-12 text-xs text-ink-400">
+                                {o.phraseChinese}
+                              </p>
+                            )}
+                          </div>
+                        )}
+
+                        {/* 跟读状态 / 评分 */}
+                        {isActive && shadowBusy && (
+                          <p className="pl-12 text-xs text-ink-300">
+                            {phase === "preparing"
+                              ? "准备中…"
+                              : phase === "recording"
+                                ? "正在录音…请跟读"
+                                : "识别中…"}
                           </p>
+                        )}
+                        {isActive && phase === "scored" && result && (
+                          <div className="space-y-1 pl-12 text-xs">
+                            <p>
+                              得分{" "}
+                              <span
+                                className={`font-display text-sm font-bold ${
+                                  result.score >= 85
+                                    ? "text-good"
+                                    : result.score >= 60
+                                      ? "text-warn"
+                                      : "text-rec"
+                                }`}
+                              >
+                                {result.score}
+                              </span>
+                              {result.transcript && (
+                                <span className="text-ink-400">
+                                  {" "}
+                                  · 你读的：{result.transcript}
+                                </span>
+                              )}
+                            </p>
+                          </div>
                         )}
                       </div>
                     )}

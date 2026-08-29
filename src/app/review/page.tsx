@@ -15,7 +15,7 @@ import { recordingSupported, startRecording, audioExtFromMime } from "@/lib/reco
 import { speak } from "@/lib/tts";
 import { useMaterialMedia } from "@/components/useMaterialMedia";
 import { Rating, GRADE_LABELS, type Grade } from "@/lib/fsrs";
-import type { Card, Sentence, Material } from "@/lib/types";
+import type { Card, Sentence, Material, Recognition } from "@/lib/types";
 
 const GRADES: { grade: Grade; style: string }[] = [
   { grade: Rating.Again, style: "border-rec/40 text-rec hover:bg-rec/10" },
@@ -23,6 +23,19 @@ const GRADES: { grade: Grade; style: string }[] = [
   { grade: Rating.Good, style: "border-good/40 text-good hover:bg-good/10" },
   { grade: Rating.Easy, style: "border-signal/60 text-signal hover:bg-signal-dim" },
 ];
+
+// 九宫格方位 → 图上数字标号的位置（百分比）
+const ZONE_POS: Record<string, { top?: string; left?: string; right?: string; bottom?: string }> = {
+  "top-left": { top: "8%", left: "8%" },
+  "top": { top: "8%", left: "50%" },
+  "top-right": { top: "8%", left: "92%" },
+  "left": { top: "50%", left: "8%" },
+  "center": { top: "50%", left: "50%" },
+  "right": { top: "50%", left: "92%" },
+  "bottom-left": { top: "92%", left: "8%" },
+  "bottom": { top: "92%", left: "50%" },
+  "bottom-right": { top: "92%", left: "92%" },
+};
 
 export default function Review() {
   const [cards, setCards] = useState<Card[]>([]);
@@ -38,6 +51,8 @@ export default function Review() {
   const [error, setError] = useState("");
   const [sentence, setSentence] = useState<Sentence | null>(null);
   const [material, setMaterial] = useState<Material | null>(null);
+  const [recognition, setRecognition] = useState<Recognition | null>(null);
+  const [recogIndex, setRecogIndex] = useState(-1);
 
   const stopRef = useRef<(() => void) | null>(null);
   const supported = recordingSupported();
@@ -53,8 +68,8 @@ export default function Review() {
 
   const card = cards[idx];
   const finished = loaded && idx >= cards.length;
-  // 复述目标：识物卡优先跟读可说的短句（phrase），否则用单词/句子本身
-  const target = card?.phrase || card?.text || "";
+  // 跟读/复述目标：识物卡说单词（看图说词），句子卡跟读整句
+  const target = card?.text || "";
 
   // sentence 卡 → 查出原句所在的 material，调出视频片段（像初次跟读那样）
   useEffect(() => {
@@ -75,6 +90,25 @@ export default function Review() {
       cancelled = true;
     };
   }, [card?.sentenceId]);
+
+  // 识物卡（pronunciation，有 recognitionId）→ 查出拍照记录，调出整图 + 标号
+  useEffect(() => {
+    setRecognition(null);
+    setRecogIndex(-1);
+    if (!card || card.kind !== "pronunciation" || !card.recognitionId) return;
+    let cancelled = false;
+    (async () => {
+      const r = await db.recognitions.get(card.recognitionId!);
+      if (cancelled) return;
+      setRecognition(r ?? null);
+      if (r) {
+        setRecogIndex(r.objects.findIndex((o) => o.english === card.text));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [card?.id, card?.recognitionId, card?.kind, card?.text]);
 
   const {
     mediaKind,
@@ -232,6 +266,35 @@ export default function Review() {
               </p>
             ) : null}
 
+            {/* 识物卡：调出拍照整图 + 标号，看图说词 */}
+            {card.kind === "pronunciation" && recognition?.imageThumb && (
+              <div className="relative mx-auto mt-4 w-full max-w-sm overflow-hidden rounded-2xl border border-booth-700">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={recognition.imageThumb}
+                  alt="识别原图"
+                  className="w-full"
+                />
+                {recognition.objects.map((o, i) => {
+                  const pos = ZONE_POS[o.zone ?? ""] ?? { top: "50%", left: "50%" };
+                  const isCurrent = i === recogIndex;
+                  return (
+                    <span
+                      key={i}
+                      style={pos}
+                      className={`absolute flex h-6 w-6 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full text-xs font-bold ${
+                        isCurrent
+                          ? "bg-signal text-booth-950"
+                          : "bg-booth-900/70 text-ink-300"
+                      }`}
+                    >
+                      {i + 1}
+                    </span>
+                  );
+                })}
+              </div>
+            )}
+
             {/* sentence 卡：调出原视频片段，像初次跟读那样 */}
             {card.kind === "sentence" && sentence && mediaKind === "video" && mediaSrc && (
               <video
@@ -271,8 +334,14 @@ export default function Review() {
                 <p className="font-display text-2xl leading-relaxed text-ink-50">
                   {card.text}
                 </p>
+                {card.kind === "pronunciation" && card.chinese && (
+                  <p className="mt-1 text-sm text-ink-300">{card.chinese}</p>
+                )}
                 {card.phrase && (
                   <p className="mt-1 font-mono text-sm text-signal">“{card.phrase}”</p>
+                )}
+                {card.phraseChinese && (
+                  <p className="mt-1 text-xs text-ink-400">{card.phraseChinese}</p>
                 )}
               </div>
             ) : (
@@ -374,7 +443,7 @@ export default function Review() {
                           ? "结束录音"
                           : card.kind === "sentence"
                             ? "跟读"
-                            : "复述"}
+                            : "说出"}
                     </button>
                   )}
                   <button

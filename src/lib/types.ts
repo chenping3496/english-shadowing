@@ -47,6 +47,8 @@ export interface Card {
   sentenceId?: string;
   chinese?: string; // 中文释义（拍照识物卡）
   phrase?: string; // 带动词的可跟读短句（拍照识物卡，如 turn on the tap）
+  phraseChinese?: string; // 短语中文释义
+  recognitionId?: string; // 拍照识物卡关联的拍照记录（复习时调出整图+标号）
   hint?: string; // 复述提示
   srs: SrsState;
   createdAt: number;
@@ -69,6 +71,8 @@ export interface RecognitionObject {
   english: string;
   chinese: string;
   phrase?: string; // 带动词的可跟读短句（如 tap → "turn on the tap"）
+  phraseChinese?: string; // 短语中文释义
+  zone?: string; // 九宫格方位（top-left/top/…/bottom-right），复习标号定位用
 }
 
 export interface Recognition {

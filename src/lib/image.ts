@@ -14,8 +14,8 @@ export function hashImage(dataUrl: string): string {
   return dataUrl.length.toString(36) + "-" + (h >>> 0).toString(36);
 }
 
-/** 把图片压缩成小缩略图（JPEG data URL），用于历史列表展示，避免存原图撑爆 IndexedDB。 */
-export function makeThumb(dataUrl: string, maxW = 320): Promise<string> {
+/** 把图片压缩成缩略图（JPEG data URL），用于历史列表 + 复习标号展示，避免存原图撑爆 IndexedDB。 */
+export function makeThumb(dataUrl: string, maxW = 800): Promise<string> {
   return new Promise((resolve, reject) => {
     const img = new Image();
     img.onload = () => {
