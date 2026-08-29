@@ -1,6 +1,6 @@
 // 领域类型定义（贯穿数据层与 UI）
 
-export type MaterialType = "local" | "youtube" | "bilibili";
+export type MaterialType = "local" | "youtube" | "bilibili" | "shared";
 
 export interface Material {
   id: string;

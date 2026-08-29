@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import AppShell from "@/components/AppShell";
-import { db } from "@/lib/db";
+import { listLearn, getLearn, putLearn, deleteLearn } from "@/lib/server-api";
 import { uid } from "@/lib/id";
 import {
   addRecognitionCard,
@@ -56,12 +56,12 @@ export default function Snap() {
   const supported = recordingSupported();
 
   function refreshHistory() {
-    db.recognitions
-      .orderBy("createdAt")
-      .reverse()
-      .limit(20)
-      .toArray()
-      .then(setHistory);
+    listLearn<Recognition>("recognitions")
+      .then((rs) =>
+        setHistory(
+          [...rs].sort((a, b) => b.createdAt - a.createdAt).slice(0, 20),
+        ),
+      );
   }
 
   useEffect(() => {
@@ -109,9 +109,9 @@ export default function Snap() {
     try {
       // 去重缓存：同一张图重复拍，直接复用上次结果，不再调视觉 API
       const hash = hashImage(image);
-      const cached = await db.recognitions
-        .filter((r) => r.imageHash === hash)
-        .first();
+      const cached = (await listLearn<Recognition>("recognitions")).find(
+        (r) => r.imageHash === hash,
+      );
       // 旧版缓存缺 phraseChinese（短语释义），不算命中，删掉重识别以补齐字段
       if (cached && cached.objects.some((o) => o.phraseChinese)) {
         setObjects(cached.objects);
@@ -121,7 +121,7 @@ export default function Snap() {
         return;
       }
       if (cached) {
-        await db.recognitions.delete(cached.id);
+        await deleteLearn("recognitions", [cached.id]);
       }
       const res = await fetch("/api/vision", {
         method: "POST",
@@ -140,7 +140,7 @@ export default function Snap() {
       void syncAddedWords(objs);
       // 存历史（含去重哈希）；缩略图失败不影响历史与缓存
       try {
-        await db.recognitions.add({
+        await putLearn("recognitions", {
           id: rid,
           objects: objs,
           imageHash: hash,
@@ -149,7 +149,11 @@ export default function Snap() {
         refreshHistory();
         try {
           const thumb = await makeThumb(image);
-          await db.recognitions.update(rid, { imageThumb: thumb });
+          const rec = await getLearn<Recognition>("recognitions", rid);
+          if (rec) {
+            rec.imageThumb = thumb;
+            await putLearn("recognitions", rec);
+          }
           refreshHistory();
         } catch {
           // 缩略图失败静默忽略，历史仍保留

@@ -1,4 +1,6 @@
 import { NextResponse } from "next/server";
+import { requireUser } from "@/lib/server/guard";
+import { rateLimit } from "@/lib/server/rate-limit";
 
 export interface VisionObject {
   english: string;
@@ -40,6 +42,12 @@ export async function POST(request: Request) {
       },
       { status: 501 },
     );
+  }
+
+  const auth = await requireUser();
+  if (auth instanceof NextResponse) return auth;
+  if (!rateLimit(`vision:${auth.id}`, 30, 60_000)) {
+    return NextResponse.json({ error: "请求过于频繁，请稍后再试" }, { status: 429 });
   }
 
   const baseUrl = (process.env.VISION_BASE_URL ?? DEFAULT_BASE_URL).replace(

@@ -1,7 +1,8 @@
 import { db } from "./db";
+import { listLearn, putLearn } from "./server-api";
 import { uid } from "./id";
 import { isDue } from "./fsrs";
-import type { Session } from "./types";
+import type { Session, Attempt, Card } from "./types";
 
 function fmt(d: Date): string {
   const y = d.getFullYear();
@@ -39,15 +40,16 @@ export function last7Days(dates: string[]): { date: string; done: boolean }[] {
 /** 每次跟读后累计今日会话（用于连续天数/今日句数） */
 export async function bumpSession(score: number): Promise<void> {
   const today = fmt(new Date());
-  const existing = await db.sessions.where("date").equals(today).first();
+  const sessions = await listLearn<Session>("sessions");
+  const existing = sessions.find((s) => s.date === today);
   if (existing) {
     const n = existing.sentenceCount;
     existing.avgScore = Math.round((existing.avgScore * n + score) / (n + 1));
     existing.sentenceCount = n + 1;
     existing.durationSec += 8;
-    await db.sessions.put(existing);
+    await putLearn("sessions", existing);
   } else {
-    await db.sessions.add({
+    await putLearn("sessions", {
       id: uid(),
       date: today,
       durationSec: 8,
@@ -66,9 +68,9 @@ export interface ProgressDay {
 
 export async function loadProgress() {
   const [attempts, sessions, cards, materials, sentences] = await Promise.all([
-    db.attempts.toArray(),
-    db.sessions.toArray(),
-    db.cards.toArray(),
+    listLearn<Attempt>("attempts"),
+    listLearn<Session>("sessions"),
+    listLearn<Card>("cards"),
     db.materials.toArray(),
     db.sentences.toArray(),
   ]);
@@ -107,8 +109,8 @@ export async function loadProgress() {
 
 export async function loadDashboard() {
   const [sessions, cards, materials, sentences] = await Promise.all([
-    db.sessions.toArray(),
-    db.cards.toArray(),
+    listLearn<Session>("sessions"),
+    listLearn<Card>("cards"),
     db.materials.toArray(),
     db.sentences.toArray(),
   ]);

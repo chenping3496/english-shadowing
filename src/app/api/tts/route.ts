@@ -1,4 +1,6 @@
 import { NextResponse } from "next/server";
+import { requireUser } from "@/lib/server/guard";
+import { rateLimit } from "@/lib/server/rate-limit";
 
 // 阿里 DashScope 非实时语音合成（CosyVoice）：
 // 复用 VISION_API_KEY（同一 sk- key），一个单词/短句约 0.001 元，新用户有免费额度。
@@ -22,6 +24,12 @@ export async function POST(request: Request) {
   const key = process.env.VISION_API_KEY;
   if (!key) {
     return NextResponse.json({ error: "未配置 VISION_API_KEY" }, { status: 500 });
+  }
+
+  const auth = await requireUser();
+  if (auth instanceof NextResponse) return auth;
+  if (!rateLimit(`tts:${auth.id}`, 60, 60_000)) {
+    return NextResponse.json({ error: "请求过于频繁，请稍后再试" }, { status: 429 });
   }
 
   try {

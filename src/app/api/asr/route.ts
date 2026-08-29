@@ -7,6 +7,8 @@ import { mkdtemp, rm, writeFile, readFile } from "node:fs/promises";
 
 // @ts-ignore - @ffmpeg-installer/ffmpeg 无类型声明
 import ffmpegInstaller from "@ffmpeg-installer/ffmpeg";
+import { requireUser } from "@/lib/server/guard";
+import { rateLimit } from "@/lib/server/rate-limit";
 
 const execFileAsync = promisify(execFile);
 const ffmpegPath = (ffmpegInstaller as unknown as { path: string }).path;
@@ -36,6 +38,12 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "未配置语音识别 API Key" }, { status: 500 });
   }
   if (!/^[a-z0-9]+$/i.test(ext)) ext = "webm";
+
+  const auth = await requireUser();
+  if (auth instanceof NextResponse) return auth;
+  if (!rateLimit(`asr:${auth.id}`, 60, 60_000)) {
+    return NextResponse.json({ error: "请求过于频繁，请稍后再试" }, { status: 429 });
+  }
 
   const dir = await mkdtemp(join(tmpdir(), "shadow-asr-"));
   try {

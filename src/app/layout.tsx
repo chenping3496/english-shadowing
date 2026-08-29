@@ -1,6 +1,8 @@
 import type { Metadata, Viewport } from "next";
 import { Chakra_Petch, Archivo, JetBrains_Mono } from "next/font/google";
 import ServiceWorkerRegister from "@/components/ServiceWorkerRegister";
+import { AuthProvider } from "@/components/AuthProvider";
+import { AuthGate } from "@/components/AuthGate";
 import "./globals.css";
 
 /*
@@ -68,7 +70,9 @@ export default function RootLayout({
       className={`${chakra.variable} ${archivo.variable} ${jetbrains.variable} h-full`}
     >
       <body className="min-h-full bg-booth-950 text-ink-50 antialiased">
-        {children}
+        <AuthProvider>
+          <AuthGate>{children}</AuthGate>
+        </AuthProvider>
         <ServiceWorkerRegister />
       </body>
     </html>

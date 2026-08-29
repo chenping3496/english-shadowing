@@ -2,10 +2,15 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import AppShell from "@/components/AppShell";
 import { loadDashboard } from "@/lib/stats";
+import { logout } from "@/lib/auth-client";
+import { useAuth } from "@/components/AuthProvider";
 
 export default function Home() {
+  const router = useRouter();
+  const { user, setUser } = useAuth();
   const [data, setData] = useState<Awaited<
     ReturnType<typeof loadDashboard>
   > | null>(null);
@@ -13,6 +18,12 @@ export default function Home() {
   useEffect(() => {
     loadDashboard().then(setData);
   }, []);
+
+  async function handleLogout() {
+    await logout();
+    setUser(null);
+    router.push("/");
+  }
 
   const d = data ?? {
     streak: 0,
@@ -34,8 +45,34 @@ export default function Home() {
             跟读训练
           </h1>
         </div>
-        <div className="rounded-full border border-booth-700 px-3 py-1 font-mono text-[11px] text-ink-300">
-          DAY {String(d.streak).padStart(2, "0")}
+        <div className="flex items-center gap-2">
+          <div className="rounded-full border border-booth-700 px-3 py-1 font-mono text-[11px] text-ink-300">
+            DAY {String(d.streak).padStart(2, "0")}
+          </div>
+          {user?.role === "admin" && (
+            <Link
+              href="/admin"
+              className="rounded-full border border-signal/40 px-3 py-1 text-[11px] text-signal transition-colors hover:bg-signal-dim"
+            >
+              后台
+            </Link>
+          )}
+          {user ? (
+            <button
+              onClick={handleLogout}
+              title={user.email}
+              className="rounded-full border border-booth-700 px-3 py-1 text-[11px] text-ink-300 transition-colors hover:border-signal hover:text-signal"
+            >
+              退出
+            </button>
+          ) : (
+            <Link
+              href="/login"
+              className="rounded-full border border-booth-700 px-3 py-1 text-[11px] text-ink-300 transition-colors hover:border-signal hover:text-signal"
+            >
+              登录
+            </Link>
+          )}
         </div>
       </header>
 

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { db } from "@/lib/db";
 import { uid } from "@/lib/id";
+import { putLearn } from "@/lib/server-api";
 import { ensureSentenceCard, addMissedWordCards } from "@/lib/cards";
 import { bumpSession } from "@/lib/stats";
 import {
@@ -157,7 +158,7 @@ export default function PracticeClient({ materialId }: { materialId: string }) {
         setPhase("scored");
         setDoneScores((prev) => [...prev, analysis.score]);
         try {
-          await db.attempts.add({
+          await putLearn("attempts", {
             id: uid(),
             sentenceId: sentence.id,
             kind: "shadow",

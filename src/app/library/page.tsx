@@ -9,11 +9,18 @@ import { segmentCues } from "@/lib/segment";
 import { createMaterialFromCues } from "@/lib/import";
 import { readAudioDuration } from "@/lib/import";
 import { deleteMaterials } from "@/lib/materials";
+import {
+  listShared,
+  importShared,
+  isSharedImported,
+  type SharedMaterialMeta,
+} from "@/lib/shared-client";
 import type { Material } from "@/lib/types";
 import type { TranscriptCue } from "@/app/api/transcript/route";
 
-type Tab = "local" | "youtube" | "bilibili";
+type Tab = "local" | "youtube" | "bilibili" | "shared";
 type MaterialItem = Material & { sentenceCount: number };
+type SharedItem = SharedMaterialMeta & { imported: boolean };
 type FetchResult = { title: string; cues: TranscriptCue[]; lang?: string };
 type BiliPage = { cid: number; page: number; part: string };
 
@@ -22,6 +29,12 @@ export default function Library() {
   const [materials, setMaterials] = useState<MaterialItem[]>([]);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
+
+  // 共享素材
+  const [sharedItems, setSharedItems] = useState<SharedItem[]>([]);
+  const [sharedLoading, setSharedLoading] = useState(false);
+  const [sharedError, setSharedError] = useState("");
+  const [importingId, setImportingId] = useState<string | null>(null);
 
   // 本地
   const [title, setTitle] = useState("");
@@ -67,6 +80,42 @@ export default function Library() {
   useEffect(() => {
     reload();
   }, []);
+
+  async function loadShared() {
+    setSharedLoading(true);
+    setSharedError("");
+    try {
+      const items = await listShared();
+      const imported = await Promise.all(
+        items.map((m) => isSharedImported(m.id)),
+      );
+      setSharedItems(items.map((m, i) => ({ ...m, imported: imported[i] })));
+    } catch (e) {
+      setSharedError(e instanceof Error ? e.message : "加载失败");
+    } finally {
+      setSharedLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    if (tab === "shared") loadShared();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab]);
+
+  async function handleSharedImport(id: string) {
+    setImportingId(id);
+    setSharedError("");
+    setMsg("");
+    try {
+      const r = await importShared(id);
+      setMsg(`已导入 · ${r.sentenceCount} 句，去「跟读」开始练习`);
+      await Promise.all([loadShared(), reload()]);
+    } catch (e) {
+      setSharedError(e instanceof Error ? e.message : "导入失败");
+    } finally {
+      setImportingId(null);
+    }
+  }
 
   async function handleSrtFile(file: File | null) {
     if (!file) return;
@@ -295,6 +344,7 @@ export default function Library() {
             ["local", "本地导入"],
             ["youtube", "YouTube 链接"],
             ["bilibili", "Bilibili 链接"],
+            ["shared", "共享"],
           ] as [Tab, string][]
         ).map(([key, label]) => (
           <button
@@ -423,6 +473,59 @@ export default function Library() {
               </div>
             )}
           </section>
+        ) : tab === "shared" ? (
+          <section className="space-y-3">
+            {sharedError && (
+              <p className="rounded-xl border border-rec/30 bg-rec/10 px-4 py-3 text-sm text-rec">
+                {sharedError}
+              </p>
+            )}
+            {sharedLoading ? (
+              <p className="py-8 text-center text-sm text-ink-300">加载中…</p>
+            ) : sharedItems.length === 0 ? (
+              <div className="rounded-2xl border border-booth-700 bg-booth-900 p-6 text-center text-sm text-ink-300">
+                暂无共享素材，管理员上传后这里会出现
+              </div>
+            ) : (
+              <ul className="space-y-2">
+                {sharedItems.map((m) => (
+                  <li
+                    key={m.id}
+                    className="flex items-center gap-3 rounded-2xl border border-booth-700 bg-booth-900 p-4"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-semibold text-ink-50">
+                        {m.title}
+                      </p>
+                      <p className="mt-0.5 font-mono text-[11px] text-ink-300">
+                        {m.source ? `${m.source} · ` : ""}
+                        {m.sentenceCount} 句
+                        {m.durationSec
+                          ? ` · ${Math.round(m.durationSec / 60)} 分`
+                          : ""}
+                      </p>
+                    </div>
+                    {m.imported ? (
+                      <Link
+                        href={`/practice/${encodeURIComponent(`shared_${m.id}`)}`}
+                        className="shrink-0 rounded-full border border-signal px-4 py-2 text-xs font-semibold text-signal transition-colors hover:bg-signal-dim"
+                      >
+                        练习
+                      </Link>
+                    ) : (
+                      <button
+                        onClick={() => handleSharedImport(m.id)}
+                        disabled={importingId === m.id}
+                        className="shrink-0 rounded-full bg-signal px-4 py-2 text-xs font-semibold text-booth-950 transition-colors hover:bg-signal-strong disabled:opacity-50"
+                      >
+                        {importingId === m.id ? "导入中…" : "导入"}
+                      </button>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
         ) : (
           <section className="space-y-4 rounded-2xl border border-booth-700 bg-booth-900 p-5">
             <div>
@@ -521,7 +624,9 @@ export default function Library() {
                     ? "YouTube"
                     : m.type === "bilibili"
                       ? "Bilibili"
-                      : "本地";
+                      : m.type === "shared"
+                        ? "共享"
+                        : "本地";
                 const isSel = selected.has(m.id);
                 return (
                   <li key={m.id} className="flex items-center gap-2">

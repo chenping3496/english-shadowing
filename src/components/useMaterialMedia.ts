@@ -24,6 +24,7 @@ export interface MaterialMedia {
  * 素材媒体加载 + 区间播放（跟读 / 复习共用）：
  * - 本地素材：audioBlob → object URL（<audio>）
  * - B 站：优先 videoBlob 缓存 → 否则 /api/bilibili/play 直连 + 后台下载缓存
+ * - 共享素材：sourceUrl（/api/media 或 COS 预签名地址）直连流式播放
  * - YouTube：无媒体（调用方自行处理纯文本朗读）
  */
 export function useMaterialMedia(material: Material | null): MaterialMedia {
@@ -114,6 +115,20 @@ export function useMaterialMedia(material: Material | null): MaterialMedia {
     return () => {
       cancelled = true;
     };
+  }, [material]);
+
+  // 共享素材：直接流式播放服务端视频（本地磁盘或 COS 预签名地址）
+  useEffect(() => {
+    if (material?.type !== "shared") return;
+    if (material.sourceUrl) {
+      setMediaSrc(material.sourceUrl);
+      setMediaKind("video");
+      setMediaError("");
+    } else {
+      setMediaSrc(null);
+      setMediaKind(null);
+      setMediaError("共享视频地址缺失");
+    }
   }, [material]);
 
   const playSegment = useCallback((startSec: number, endSec: number) => {

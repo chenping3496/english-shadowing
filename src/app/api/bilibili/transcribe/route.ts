@@ -13,6 +13,8 @@ import {
 
 // @ts-ignore - @ffmpeg-installer/ffmpeg 无类型声明
 import ffmpegInstaller from "@ffmpeg-installer/ffmpeg";
+import { requireUser } from "@/lib/server/guard";
+import { rateLimit } from "@/lib/server/rate-limit";
 
 const execFileAsync = promisify(execFile);
 const ffmpegPath = (ffmpegInstaller as unknown as { path: string }).path;
@@ -168,6 +170,12 @@ export async function POST(request: Request) {
   }
   if (!ASR_KEY) {
     return NextResponse.json({ error: "未配置语音识别 API Key" }, { status: 500 });
+  }
+
+  const auth = await requireUser();
+  if (auth instanceof NextResponse) return auth;
+  if (!rateLimit(`bili-transcribe:${auth.id}`, 5, 60_000)) {
+    return NextResponse.json({ error: "请求过于频繁，请稍后再试" }, { status: 429 });
   }
 
   const ctx = await buildBiliRequest(input);

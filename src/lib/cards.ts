@@ -1,13 +1,12 @@
-import { db } from "./db";
+import { listLearn, getLearn, putLearn, deleteLearn } from "./server-api";
 import { uid } from "./id";
 import { newSrsState, review, isDue, type Grade } from "./fsrs";
 import type { Card, Sentence, RecognitionObject } from "./types";
 
 /** 为句子创建复习卡（已存在则跳过） */
 export async function ensureSentenceCard(sentence: Sentence): Promise<void> {
-  const existing = await db.cards
-    .filter((c) => c.sentenceId === sentence.id)
-    .first();
+  const all = await listLearn<Card>("cards");
+  const existing = all.find((c) => c.sentenceId === sentence.id);
   if (existing) return;
   const card: Card = {
     id: uid(),
@@ -18,7 +17,7 @@ export async function ensureSentenceCard(sentence: Sentence): Promise<void> {
     srs: newSrsState(),
     createdAt: Date.now(),
   };
-  await db.cards.add(card);
+  await putLearn("cards", card);
 }
 
 /** 把单个识物结果加入生词本（发音卡，去重），关联拍照记录以便复习调出整图。返回是否新增。 */
@@ -28,9 +27,10 @@ export async function addRecognitionCard(
 ): Promise<boolean> {
   const text = o.english.trim();
   if (!text) return false;
-  const existing = await db.cards
-    .filter((c) => c.kind === "pronunciation" && c.text === text)
-    .first();
+  const all = await listLearn<Card>("cards");
+  const existing = all.find(
+    (c) => c.kind === "pronunciation" && c.text === text,
+  );
   if (existing) return false;
   const card: Card = {
     id: uid(),
@@ -44,24 +44,29 @@ export async function addRecognitionCard(
     srs: newSrsState(),
     createdAt: Date.now(),
   };
-  await db.cards.add(card);
+  await putLearn("cards", card);
   return true;
 }
 
 /** 取消生词本里的一个识物词（按英文词删除发音卡）。 */
 export async function removeRecognitionCard(text: string): Promise<void> {
-  const card = await db.cards
-    .filter((c) => c.kind === "pronunciation" && c.text === text)
-    .first();
-  if (card) await db.cards.delete(card.id);
+  const all = await listLearn<Card>("cards");
+  const card = all.find(
+    (c) => c.kind === "pronunciation" && c.text === text,
+  );
+  if (card) await deleteLearn("cards", [card.id]);
 }
 
 /** 查一组英文词里，哪些已经在生词本（发音卡）中。 */
 export async function getExistingWordSet(words: string[]): Promise<Set<string>> {
   const want = new Set(words.map((w) => w.trim()).filter(Boolean));
   if (!want.size) return new Set();
-  const all = await db.cards.filter((c) => c.kind === "pronunciation").toArray();
-  return new Set(all.filter((c) => want.has(c.text)).map((c) => c.text));
+  const all = await listLearn<Card>("cards");
+  return new Set(
+    all
+      .filter((c) => c.kind === "pronunciation" && want.has(c.text))
+      .map((c) => c.text),
+  );
 }
 
 /** 把跟读/复述读错的词生成发音卡（kind=pronunciation，去重），返回实际新增的词 */
@@ -69,10 +74,9 @@ export async function addMissedWordCards(
   missedWords: string[],
   context: string,
 ): Promise<string[]> {
+  const all = await listLearn<Card>("cards");
   const existing = new Set(
-    (await db.cards.filter((c) => c.kind === "pronunciation").toArray()).map(
-      (c) => c.text,
-    ),
+    all.filter((c) => c.kind === "pronunciation").map((c) => c.text),
   );
   const added: string[] = [];
   for (const word of missedWords) {
@@ -86,7 +90,7 @@ export async function addMissedWordCards(
       srs: newSrsState(),
       createdAt: Date.now(),
     };
-    await db.cards.add(card);
+    await putLearn("cards", card);
     existing.add(text);
     added.push(text);
   }
@@ -95,7 +99,7 @@ export async function addMissedWordCards(
 
 /** 加载到期的复习卡（按到期时间排序） */
 export async function loadDueCards(): Promise<Card[]> {
-  const all = await db.cards.toArray();
+  const all = await listLearn<Card>("cards");
   return all
     .filter((c) => isDue(c.srs))
     .sort((a, b) => a.srs.due - b.srs.due);
@@ -103,8 +107,8 @@ export async function loadDueCards(): Promise<Card[]> {
 
 /** 应用一次复习评分 */
 export async function applyReview(cardId: string, grade: Grade): Promise<void> {
-  const card = await db.cards.get(cardId);
+  const card = await getLearn<Card>("cards", cardId);
   if (!card) return;
   card.srs = review(card.srs, grade);
-  await db.cards.put(card);
+  await putLearn("cards", card);
 }

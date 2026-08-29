@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { loadDueCards, applyReview, addMissedWordCards } from "@/lib/cards";
 import { db } from "@/lib/db";
+import { getLearn } from "@/lib/server-api";
 import {
   analyze,
   analyzeFluency,
@@ -98,7 +99,7 @@ export default function Review() {
     if (!card || card.kind !== "pronunciation" || !card.recognitionId) return;
     let cancelled = false;
     (async () => {
-      const r = await db.recognitions.get(card.recognitionId!);
+      const r = await getLearn<Recognition>("recognitions", card.recognitionId!);
       if (cancelled) return;
       setRecognition(r ?? null);
       if (r) {

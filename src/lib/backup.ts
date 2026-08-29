@@ -1,14 +1,9 @@
 import { db, loadSettings, saveSettings } from "./db";
-import type {
-  Material,
-  Sentence,
-  Card,
-  Attempt,
-  Recognition,
-  Session,
-} from "./types";
+import { syncLearn } from "./server-api";
+import type { Material, Sentence } from "./types";
 
-const BACKUP_VERSION = 1;
+// v2：学习数据（卡片/记录/识别/会话）已迁到服务端账号，本备份只管「本地素材 + 句子 + 设置」。
+const BACKUP_VERSION = 2;
 
 /** 素材里的 Blob 无法直接 JSON 序列化，导出时转 base64 */
 interface BackupMaterial extends Omit<Material, "audioBlob" | "videoBlob"> {
@@ -22,15 +17,14 @@ export interface BackupFile {
   settings: { level: number; targetMinutes: number };
   materials: BackupMaterial[];
   sentences: Sentence[];
-  cards: Card[];
-  attempts: Attempt[];
-  recognitions: Recognition[];
-  sessions: Session[];
 }
 
 export interface ImportResult {
   materials: number;
   sentences: number;
+}
+
+export interface MigrateResult {
   cards: number;
   attempts: number;
   recognitions: number;
@@ -53,17 +47,12 @@ function base64ToBlob(base64: string, type: string): Blob {
   return new Blob([bytes], { type });
 }
 
-/** 全量导出为备份对象（供调用方 JSON.stringify 后下载） */
+/** 全量导出本地数据（素材 + 句子 + 设置）为备份对象 */
 export async function buildBackup(): Promise<BackupFile> {
-  const [materials, sentences, cards, attempts, recognitions, sessions] =
-    await Promise.all([
-      db.materials.toArray(),
-      db.sentences.toArray(),
-      db.cards.toArray(),
-      db.attempts.toArray(),
-      db.recognitions.toArray(),
-      db.sessions.toArray(),
-    ]);
+  const [materials, sentences] = await Promise.all([
+    db.materials.toArray(),
+    db.sentences.toArray(),
+  ]);
 
   const materialsOut: BackupMaterial[] = await Promise.all(
     materials.map(async (m) => {
@@ -91,14 +80,10 @@ export async function buildBackup(): Promise<BackupFile> {
     settings: loadSettings(),
     materials: materialsOut,
     sentences,
-    cards,
-    attempts,
-    recognitions,
-    sessions,
   };
 }
 
-/** 从备份 JSON 恢复（覆盖当前全部数据） */
+/** 从备份 JSON 恢复本地素材 + 句子（覆盖当前本地数据） */
 export async function restoreBackup(json: string): Promise<ImportResult> {
   let data: BackupFile;
   try {
@@ -129,47 +114,45 @@ export async function restoreBackup(json: string): Promise<ImportResult> {
   });
 
   const sentences = data.sentences ?? [];
-  const cards = data.cards ?? [];
-  const attempts = data.attempts ?? [];
-  const recognitions = data.recognitions ?? [];
-  const sessions = data.sessions ?? [];
 
-  await db.transaction(
-    "rw",
-    [
-      db.materials,
-      db.sentences,
-      db.cards,
-      db.attempts,
-      db.recognitions,
-      db.sessions,
-    ],
-    async () => {
-      await Promise.all([
-        db.materials.clear(),
-        db.sentences.clear(),
-        db.cards.clear(),
-        db.attempts.clear(),
-        db.recognitions.clear(),
-        db.sessions.clear(),
-      ]);
-      await db.materials.bulkPut(materials);
-      await db.sentences.bulkPut(sentences);
-      await db.cards.bulkPut(cards);
-      await db.attempts.bulkPut(attempts);
-      await db.recognitions.bulkPut(recognitions);
-      await db.sessions.bulkPut(sessions);
-    },
-  );
+  await db.transaction("rw", db.materials, db.sentences, async () => {
+    await Promise.all([db.materials.clear(), db.sentences.clear()]);
+    await db.materials.bulkPut(materials);
+    await db.sentences.bulkPut(sentences);
+  });
 
   if (data.settings) saveSettings(data.settings);
 
-  return {
-    materials: materials.length,
-    sentences: sentences.length,
-    cards: cards.length,
-    attempts: attempts.length,
-    recognitions: recognitions.length,
-    sessions: sessions.length,
-  };
+  return { materials: materials.length, sentences: sentences.length };
+}
+
+/**
+ * 一次性迁移：把旧版留在浏览器里的学习数据（卡片/跟读记录/拍照识别/每日会话）
+ * 推送到当前登录账号。幂等（重复执行按 id 覆盖，不产生重复）。
+ */
+export async function migrateLocalLearningData(): Promise<MigrateResult> {
+  const [cards, attempts, recognitions, sessions] = await Promise.all([
+    db.cards.toArray(),
+    db.attempts.toArray(),
+    db.recognitions.toArray(),
+    db.sessions.toArray(),
+  ]);
+  const { imported } = await syncLearn({
+    cards,
+    attempts,
+    recognitions,
+    sessions,
+  });
+  return imported;
+}
+
+/** 旧版本地学习数据还剩多少（迁移前展示给用户） */
+export async function localLearningCount(): Promise<MigrateResult> {
+  const [cards, attempts, recognitions, sessions] = await Promise.all([
+    db.cards.count(),
+    db.attempts.count(),
+    db.recognitions.count(),
+    db.sessions.count(),
+  ]);
+  return { cards, attempts, recognitions, sessions };
 }
