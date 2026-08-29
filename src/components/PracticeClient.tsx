@@ -35,6 +35,8 @@ export default function PracticeClient({ materialId }: { materialId: string }) {
   const [mediaSrc, setMediaSrc] = useState<string | null>(null);
   const [mediaError, setMediaError] = useState("");
   const [playing, setPlaying] = useState(false);
+  // 准备阶段（优化3）：先进「先听 + 看文本 + 确认理解」，ready 后才是跟读录音
+  const [ready, setReady] = useState(false);
 
   const mediaRef = useRef<HTMLMediaElement | null>(null);
   const endTimer = useRef<number | null>(null);
@@ -322,6 +324,7 @@ export default function PracticeClient({ materialId }: { materialId: string }) {
     (next: number) => {
       stopPlayback();
       setIdx(Math.max(0, Math.min(sentences.length - 1, next)));
+      setReady(false); // 切句回到准备阶段，先听再看再跟读
       setPhase("idle");
       setResult(null);
       setFluency(null);
@@ -520,6 +523,10 @@ export default function PracticeClient({ materialId }: { materialId: string }) {
                   </div>
                   <p className="text-xs text-ink-300">跟读得分</p>
                 </div>
+              ) : !ready ? (
+                <p className="max-w-xs text-sm text-ink-300">
+                  先听原句，看懂意思，再点下方「开始跟读」
+                </p>
               ) : (
                 <div className="h-14" />
               )}
@@ -610,7 +617,23 @@ export default function PracticeClient({ materialId }: { materialId: string }) {
             </button>
           )}
 
-          {phase === "scored" ? (
+          {!ready ? (
+            <>
+              <button
+                onClick={() => goto(idx + 1)}
+                className="rounded-full border border-booth-700 px-5 py-3 text-sm text-ink-300 hover:border-rec hover:text-rec"
+                title="这句文本识别有误？跳过不练"
+              >
+                跳过
+              </button>
+              <button
+                onClick={() => setReady(true)}
+                className="rounded-full bg-signal px-8 py-3 text-base font-semibold text-booth-950 hover:bg-signal-strong"
+              >
+                ✓ 我理解了，开始跟读
+              </button>
+            </>
+          ) : phase === "scored" ? (
             <>
               <button
                 onClick={repeatSentence}
@@ -650,26 +673,17 @@ export default function PracticeClient({ materialId }: { materialId: string }) {
               识别中…
             </button>
           ) : (
-            <>
-              <button
-                onClick={() => goto(idx + 1)}
-                className="rounded-full border border-booth-700 px-5 py-3 text-sm text-ink-300 hover:border-rec hover:text-rec"
-                title="这句文本识别有误？跳过不练"
-              >
-                跳过
-              </button>
-              <button
-                onClick={startListening}
-                disabled={!supported}
-                className="flex items-center gap-2 rounded-full bg-signal px-8 py-3 text-base font-semibold text-booth-950 transition-colors hover:bg-signal-strong disabled:opacity-50"
-              >
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
-                  <rect x="9" y="3" width="6" height="12" rx="3" />
-                  <path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v3" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-                </svg>
-                开始跟读
-              </button>
-            </>
+            <button
+              onClick={startListening}
+              disabled={!supported}
+              className="flex items-center gap-2 rounded-full bg-signal px-8 py-3 text-base font-semibold text-booth-950 transition-colors hover:bg-signal-strong disabled:opacity-50"
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+                <rect x="9" y="3" width="6" height="12" rx="3" />
+                <path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v3" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+              </svg>
+              开始跟读
+            </button>
           )}
         </footer>
       )}
