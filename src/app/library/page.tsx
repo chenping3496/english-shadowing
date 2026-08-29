@@ -475,7 +475,7 @@ export default function Library() {
             {biliNoSubtitle && (
               <div className="space-y-3">
                 <p className="text-sm text-ink-300">
-                  该视频没有独立字幕（字幕烧录在画面里），需要语音转写。请选择要学习的一集：
+                  该视频没有英文字幕（无字幕或仅中文等），将语音转写为英文。请选择要学习的一集：
                 </p>
                 {biliPages.length > 0 && (
                   <select

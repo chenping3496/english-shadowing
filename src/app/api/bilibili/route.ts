@@ -101,19 +101,16 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "获取字幕列表失败" }, { status: 502 });
   }
 
-  if (!subtitles.length) {
-    // 无独立字幕轨（多为烧录字幕）→ 返回分 P 列表，前端引导走 ASR 转写
+  // 只认英文轨；无字幕轨、或只有中文/其他语言轨时，都引导走 ASR 转写
+  const track = subtitles.find(
+    (s) => s.lan === "en" || /英语|English|英文/i.test(s.lan_doc ?? ""),
+  );
+  if (!track) {
     return NextResponse.json(
       { title, subtitleAvailable: false, pages },
       { status: 200 },
     );
   }
-
-  // 4. 优先英文轨，否则第一条
-  const track =
-    subtitles.find(
-      (s) => s.lan === "en" || /英语|English|英文/i.test(s.lan_doc ?? ""),
-    ) ?? subtitles[0];
   const lang = track.lan_doc || track.lan || "";
 
   let url = track.subtitle_url ?? "";
