@@ -142,12 +142,48 @@ export default function PracticeClient({ materialId }: { materialId: string }) {
     return () => {
       if (endTimer.current) clearTimeout(endTimer.current);
       stopRef.current?.();
+      // 离开页面时确保所有音频停止（尤其「我的跟读」回放）
+      try {
+        mediaRef.current?.pause();
+      } catch {
+        // 忽略
+      }
+      try {
+        myAudioRef.current?.pause();
+      } catch {
+        // 忽略
+      }
     };
   }, []);
 
   const sentence = sentences[idx];
 
+  // 暂停所有播放（原句 + 我的跟读），切句 / 重播 / 离开前调用
+  const stopPlayback = useCallback(() => {
+    try {
+      mediaRef.current?.pause();
+    } catch {
+      // 忽略
+    }
+    try {
+      myAudioRef.current?.pause();
+    } catch {
+      // 忽略
+    }
+    if (endTimer.current) {
+      clearTimeout(endTimer.current);
+      endTimer.current = null;
+    }
+    setPlaying(false);
+  }, []);
+
   const playSentence = () => {
+    // 停掉「我的跟读」回放，避免两段声音重叠
+    try {
+      myAudioRef.current?.pause();
+    } catch {
+      // 忽略
+    }
     const el = mediaRef.current;
     const s = sentences[idx];
     if (!el || !s) return;
@@ -266,12 +302,13 @@ export default function PracticeClient({ materialId }: { materialId: string }) {
 
   const goto = useCallback(
     (next: number) => {
+      stopPlayback();
       setIdx(Math.max(0, Math.min(sentences.length - 1, next)));
       setPhase("idle");
       setResult(null);
       setError("");
     },
-    [sentences.length],
+    [sentences.length, stopPlayback],
   );
 
   const repeatSentence = () => {
@@ -509,6 +546,7 @@ export default function PracticeClient({ materialId }: { materialId: string }) {
                   </button>
                   <button
                     onClick={() => {
+                      stopPlayback();
                       const el = myAudioRef.current;
                       if (el) {
                         el.currentTime = 0;
