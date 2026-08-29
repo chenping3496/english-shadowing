@@ -14,10 +14,10 @@ import {
   type Fluency,
 } from "@/lib/score";
 import { recordingSupported, startRecording, audioExtFromMime } from "@/lib/recorder";
+import { useMaterialMedia } from "./useMaterialMedia";
 import type { Material, Sentence } from "@/lib/types";
 
 type Phase = "idle" | "preparing" | "recording" | "recognizing" | "scored";
-type MediaKind = "audio" | "video" | null;
 
 export default function PracticeClient({ materialId }: { materialId: string }) {
   const [material, setMaterial] = useState<Material | null>(null);
@@ -31,25 +31,25 @@ export default function PracticeClient({ materialId }: { materialId: string }) {
   const [myAudioUrl, setMyAudioUrl] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [doneScores, setDoneScores] = useState<number[]>([]);
-  const [mediaKind, setMediaKind] = useState<MediaKind>(null);
-  const [mediaSrc, setMediaSrc] = useState<string | null>(null);
-  const [mediaError, setMediaError] = useState("");
-  const [playing, setPlaying] = useState(false);
   // 准备阶段（优化3）：先进「先听 + 看文本 + 确认理解」，ready 后才是跟读录音
   const [ready, setReady] = useState(false);
 
-  const mediaRef = useRef<HTMLMediaElement | null>(null);
-  const endTimer = useRef<number | null>(null);
   const stopRef = useRef<(() => void) | null>(null);
-  const objectUrlRef = useRef<string | null>(null);
   const myAudioUrlRef = useRef<string | null>(null);
   const myAudioRef = useRef<HTMLAudioElement | null>(null);
 
   const supported = recordingSupported();
 
-  const setMediaRef = useCallback((el: HTMLMediaElement | null) => {
-    mediaRef.current = el;
-  }, []);
+  const {
+    mediaKind,
+    mediaSrc,
+    mediaError,
+    playing,
+    setMediaRef,
+    onPause,
+    playSegment,
+    stop: stopMedia,
+  } = useMaterialMedia(material);
 
   useEffect(() => {
     (async () => {
@@ -68,96 +68,10 @@ export default function PracticeClient({ materialId }: { materialId: string }) {
     })();
   }, [materialId]);
 
-  // 本地素材：用 Blob 生成 object URL
-  useEffect(() => {
-    if (material?.audioBlob) {
-      objectUrlRef.current = URL.createObjectURL(material.audioBlob);
-      setMediaSrc(objectUrlRef.current);
-      setMediaKind("audio");
-    }
-    return () => {
-      if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
-    };
-  }, [material]);
-
-  // B 站素材：优先本地缓存，否则直连播放并后台下载缓存
-  useEffect(() => {
-    if (material?.type !== "bilibili") return;
-    let cancelled = false;
-
-    // 已有本地缓存 → object URL 直接播（秒开、不过期、可离线）
-    if (material.videoBlob) {
-      const url = URL.createObjectURL(material.videoBlob);
-      objectUrlRef.current = url;
-      setMediaSrc(url);
-      setMediaKind("video");
-      setMediaError("");
-      return () => {
-        URL.revokeObjectURL(url);
-        if (objectUrlRef.current === url) objectUrlRef.current = null;
-      };
-    }
-
-    // 无缓存 → 先拿直连地址立即播放，再后台下载缓存（下次进页生效）
-    (async () => {
-      try {
-        const res = await fetch("/api/bilibili/play", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ input: material.sourceUrl ?? "" }),
-        });
-        const data = await res.json();
-        if (!res.ok || !data.playUrl) {
-          if (!cancelled) {
-            setMediaError(data.error ?? "无法获取视频播放地址");
-            setMediaKind(null);
-          }
-          return;
-        }
-        if (cancelled) return;
-        setMediaSrc(data.playUrl);
-        setMediaKind("video");
-        setMediaError("");
-
-        // 后台下载缓存（失败/过大则保持在线播放，不影响本次练习）
-        try {
-          const dl = await fetch("/api/bilibili/download", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ input: material.sourceUrl ?? "" }),
-          });
-          if (dl.ok) {
-            const blob = await dl.blob();
-            if (!cancelled && blob.size > 0) {
-              await db.materials.update(material.id, { videoBlob: blob });
-            }
-          }
-        } catch {
-          // 缓存失败静默忽略，保留在线播放
-        }
-      } catch {
-        if (!cancelled) {
-          setMediaError("网络错误，无法获取视频");
-          setMediaKind(null);
-        }
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [material]);
-
   useEffect(() => {
     return () => {
-      if (endTimer.current) clearTimeout(endTimer.current);
       stopRef.current?.();
-      // 离开页面时确保所有音频停止（尤其「我的跟读」回放）
-      try {
-        mediaRef.current?.pause();
-      } catch {
-        // 忽略
-      }
+      // 离开页面时确保「我的跟读」回放停止（媒体由 useMaterialMedia 自行清理）
       try {
         myAudioRef.current?.pause();
       } catch {
@@ -170,22 +84,13 @@ export default function PracticeClient({ materialId }: { materialId: string }) {
 
   // 暂停所有播放（原句 + 我的跟读），切句 / 重播 / 离开前调用
   const stopPlayback = useCallback(() => {
-    try {
-      mediaRef.current?.pause();
-    } catch {
-      // 忽略
-    }
+    stopMedia();
     try {
       myAudioRef.current?.pause();
     } catch {
       // 忽略
     }
-    if (endTimer.current) {
-      clearTimeout(endTimer.current);
-      endTimer.current = null;
-    }
-    setPlaying(false);
-  }, []);
+  }, [stopMedia]);
 
   const playSentence = () => {
     // 停掉「我的跟读」回放，避免两段声音重叠
@@ -194,26 +99,9 @@ export default function PracticeClient({ materialId }: { materialId: string }) {
     } catch {
       // 忽略
     }
-    const el = mediaRef.current;
     const s = sentences[idx];
-    if (!el || !s) return;
-    const start = () => {
-      try {
-        el.currentTime = s.startSec;
-        setPlaying(true);
-        const p = el.play();
-        if (p) p.catch(() => setPlaying(false));
-        if (endTimer.current) clearTimeout(endTimer.current);
-        endTimer.current = window.setTimeout(() => {
-          el.pause();
-          setPlaying(false);
-        }, Math.max(600, (s.endSec - s.startSec) * 1000 + 300));
-      } catch {
-        setPlaying(false);
-      }
-    };
-    if (el.readyState >= 1) start();
-    else el.addEventListener("loadedmetadata", start, { once: true });
+    if (!s) return;
+    playSegment(s.startSec, s.endSec);
   };
 
   // 进入 / 切换句子时自动播放该句
@@ -443,7 +331,7 @@ export default function PracticeClient({ materialId }: { materialId: string }) {
                 className="mb-6 aspect-video w-full rounded-2xl border border-booth-700 bg-black"
                 controls
                 playsInline
-                onPause={() => setPlaying(false)}
+                onPause={onPause}
               />
             )}
 
@@ -700,7 +588,7 @@ export default function PracticeClient({ materialId }: { materialId: string }) {
           ref={setMediaRef}
           src={mediaSrc ?? undefined}
           className="hidden"
-          onPause={() => setPlaying(false)}
+          onPause={onPause}
         />
       )}
 

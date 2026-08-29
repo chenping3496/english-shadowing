@@ -11,6 +11,7 @@ import {
   startRecording,
   audioExtFromMime,
 } from "@/lib/recorder";
+import { speak } from "@/lib/tts";
 import type { VisionObject } from "@/app/api/vision/route";
 
 type Phase = "idle" | "preparing" | "recording" | "recognizing" | "scored";
@@ -32,22 +33,6 @@ export default function Snap() {
   const stopRef = useRef<(() => void) | null>(null);
 
   const supported = recordingSupported();
-  const ttsSupported =
-    typeof window !== "undefined" && "speechSynthesis" in window;
-
-  // 本地 TTS 发音示范（零成本，不调任何 API）
-  function speak(text: string) {
-    if (!ttsSupported || !text) return;
-    try {
-      window.speechSynthesis.cancel();
-      const u = new SpeechSynthesisUtterance(text);
-      u.lang = "en-US";
-      u.rate = 0.9;
-      window.speechSynthesis.speak(u);
-    } catch {
-      // 忽略
-    }
-  }
 
   function resetShadow() {
     setActiveIdx(null);
@@ -287,7 +272,7 @@ export default function Snap() {
 
                     <div className="mt-2 flex gap-2">
                       <button
-                        onClick={() => speak(phrase)}
+                        onClick={() => void speak(phrase)}
                         className="flex-1 rounded-full border border-booth-600 py-1.5 text-xs text-ink-200 hover:border-signal"
                       >
                         🔊 听

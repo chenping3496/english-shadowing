@@ -8,8 +8,11 @@ export interface VisionObject {
 
 const PROMPT =
   "识别这张照片里最主要的物体，站在中文母语学习者的角度，给出地道的英文表达。" +
-  "严格只返回一个 JSON 数组，元素为 {\"english\":\"名词或名词短语\",\"chinese\":\"中文释义\",\"phrase\":\"含这个名词的一个简短口语化动词短语\"}，最多 8 个，按显著程度排序。" +
-  "phrase 必须是能直接开口说的短句，例如英语 tap 对应 phrase 是 \"turn on the tap\"、英语 kettle 对应 \"boil the kettle\"，不要只给名词。" +
+  "严格只返回一个 JSON 数组，最多 8 个，按显著程度排序。" +
+  "每个元素必须包含三个字段：english（名词或名词短语）、chinese（中文释义）、phrase（含这个名词、能直接开口说的简短口语动词短语）。" +
+  "phrase 是必填字段，不要只给名词。例如 english 为 tap 时 phrase 是 \"turn on the tap\"，english 为 kettle 时 phrase 是 \"boil the kettle\"，english 为 keyboard 时 phrase 是 \"type on the keyboard\"。" +
+  "实在想不出动词时，用 \"use the ...\" 或 \"this is a ...\" 兜底。" +
+  "示例：[{\"english\":\"tap\",\"chinese\":\"水龙头\",\"phrase\":\"turn on the tap\"}]。" +
   "不要输出任何 JSON 之外的内容。";
 
 const DEFAULT_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1";

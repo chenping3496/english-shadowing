@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { loadDueCards, applyReview, addMissedWordCards } from "@/lib/cards";
+import { db } from "@/lib/db";
 import {
   analyze,
   analyzeFluency,
@@ -11,8 +12,10 @@ import {
   type Fluency,
 } from "@/lib/score";
 import { recordingSupported, startRecording, audioExtFromMime } from "@/lib/recorder";
+import { speak } from "@/lib/tts";
+import { useMaterialMedia } from "@/components/useMaterialMedia";
 import { Rating, GRADE_LABELS, type Grade } from "@/lib/fsrs";
-import type { Card } from "@/lib/types";
+import type { Card, Sentence, Material } from "@/lib/types";
 
 const GRADES: { grade: Grade; style: string }[] = [
   { grade: Rating.Again, style: "border-rec/40 text-rec hover:bg-rec/10" },
@@ -33,6 +36,8 @@ export default function Review() {
     "idle" | "preparing" | "recording" | "recognizing" | "scored"
   >("idle");
   const [error, setError] = useState("");
+  const [sentence, setSentence] = useState<Sentence | null>(null);
+  const [material, setMaterial] = useState<Material | null>(null);
 
   const stopRef = useRef<(() => void) | null>(null);
   const supported = recordingSupported();
@@ -50,22 +55,43 @@ export default function Review() {
   const finished = loaded && idx >= cards.length;
   // 复述目标：识物卡优先跟读可说的短句（phrase），否则用单词/句子本身
   const target = card?.phrase || card?.text || "";
-  const ttsSupported =
-    typeof window !== "undefined" && "speechSynthesis" in window;
 
-  function speak() {
-    if (!ttsSupported || !target) return;
-    try {
-      window.speechSynthesis.cancel();
-      const u = new SpeechSynthesisUtterance(target);
-      u.lang = "en-US";
-      u.rate = 0.9;
-      window.speechSynthesis.speak(u);
-    } catch {
-      // 忽略
-    }
+  // sentence 卡 → 查出原句所在的 material，调出视频片段（像初次跟读那样）
+  useEffect(() => {
+    setSentence(null);
+    setMaterial(null);
+    if (!card?.sentenceId) return;
+    let cancelled = false;
+    (async () => {
+      const s = await db.sentences.get(card.sentenceId!);
+      if (cancelled) return;
+      setSentence(s ?? null);
+      if (s) {
+        const m = await db.materials.get(s.materialId);
+        if (!cancelled) setMaterial(m ?? null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [card?.sentenceId]);
+
+  const {
+    mediaKind,
+    mediaSrc,
+    mediaError,
+    playing,
+    setMediaRef,
+    onPause,
+    playSegment,
+    stop: stopMedia,
+  } = useMaterialMedia(material);
+
+  function playOriginal() {
+    if (!sentence) return;
+    stopMedia();
+    playSegment(sentence.startSec, sentence.endSec);
   }
-
   async function recognize(blob: Blob) {
     if (!card) return;
     setPhase("recognizing");
@@ -118,6 +144,7 @@ export default function Review() {
 
   function startListening() {
     if (!card) return;
+    stopMedia();
     setError("");
     setAnalysis(null);
     setFluency(null);
@@ -138,6 +165,7 @@ export default function Review() {
 
   async function grade(g: Grade) {
     if (!card) return;
+    stopMedia();
     await applyReview(card.id, g);
     setRevealed(false);
     setAnalysis(null);
@@ -204,10 +232,33 @@ export default function Review() {
               </p>
             ) : null}
 
+            {/* sentence 卡：调出原视频片段，像初次跟读那样 */}
+            {card.kind === "sentence" && sentence && mediaKind === "video" && mediaSrc && (
+              <video
+                ref={setMediaRef}
+                src={mediaSrc}
+                className="mt-4 aspect-video w-full rounded-2xl border border-booth-700 bg-black"
+                controls
+                playsInline
+                onPause={onPause}
+              />
+            )}
+            {card.kind === "sentence" && sentence && (
+              <button
+                onClick={playOriginal}
+                className="mt-4 inline-flex items-center gap-1 rounded-full border border-booth-600 px-4 py-1.5 text-xs text-ink-200 hover:border-signal"
+              >
+                {playing ? "⏸ 播放中…" : "▶ 听原句"}
+              </button>
+            )}
+            {mediaError && (
+              <p className="mt-2 text-xs text-rec">{mediaError}</p>
+            )}
+
             {/* 发音示范：识物卡复习时先听再回忆；句子卡揭晓后显示 */}
             {(card.kind === "pronunciation" || revealed) && (
               <button
-                onClick={speak}
+                onClick={() => void speak(target)}
                 className="mt-4 inline-flex items-center gap-1 rounded-full border border-booth-600 px-4 py-1.5 text-xs text-ink-200 hover:border-signal"
               >
                 🔊 听发音
@@ -260,7 +311,7 @@ export default function Review() {
                   >
                     {analysis.score}
                   </span>
-                  <p className="text-xs text-ink-300">复述得分</p>
+                  <p className="text-xs text-ink-300">跟读得分</p>
                 </div>
               ) : null}
               {phase === "preparing" && (
@@ -270,7 +321,7 @@ export default function Review() {
               )}
               {phase === "recording" && (
                 <p className="min-h-5 max-w-sm text-sm text-ink-200">
-                  正在录音…请复述
+                  正在录音…请跟读
                 </p>
               )}
               {analysis && (
@@ -321,7 +372,9 @@ export default function Review() {
                         ? "准备中…"
                         : phase === "recording"
                           ? "结束录音"
-                          : "复述"}
+                          : card.kind === "sentence"
+                            ? "跟读"
+                            : "复述"}
                     </button>
                   )}
                   <button
@@ -356,6 +409,16 @@ export default function Review() {
               <p className="mt-4 text-xs text-warn">
                 当前浏览器不支持录音，可点击「显示答案」直接自评
               </p>
+            )}
+
+            {/* 本地音频素材：隐藏 <audio> 用于「听原句」 */}
+            {mediaKind === "audio" && (
+              <audio
+                ref={setMediaRef}
+                src={mediaSrc ?? undefined}
+                className="hidden"
+                onPause={onPause}
+              />
             )}
           </section>
         )}
