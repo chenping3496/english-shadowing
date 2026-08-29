@@ -3,11 +3,13 @@ import { NextResponse } from "next/server";
 export interface VisionObject {
   english: string;
   chinese: string;
+  phrase?: string;
 }
 
 const PROMPT =
   "识别这张照片里最主要的物体，站在中文母语学习者的角度，给出地道的英文表达。" +
-  "严格只返回一个 JSON 数组，元素为 {\"english\":\"...\",\"chinese\":\"...\"}，最多 8 个，按显著程度排序。" +
+  "严格只返回一个 JSON 数组，元素为 {\"english\":\"名词或名词短语\",\"chinese\":\"中文释义\",\"phrase\":\"含这个名词的一个简短口语化动词短语\"}，最多 8 个，按显著程度排序。" +
+  "phrase 必须是能直接开口说的短句，例如英语 tap 对应 phrase 是 \"turn on the tap\"、英语 kettle 对应 \"boil the kettle\"，不要只给名词。" +
   "不要输出任何 JSON 之外的内容。";
 
 const DEFAULT_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1";
@@ -99,6 +101,7 @@ export async function POST(request: Request) {
         .map((o) => ({
           english: String(o.english).trim(),
           chinese: String(o.chinese ?? "").trim(),
+          phrase: typeof o.phrase === "string" ? o.phrase.trim() : undefined,
         }))
         .slice(0, 8);
     }

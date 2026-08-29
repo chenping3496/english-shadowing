@@ -48,6 +48,23 @@ export default function Review() {
 
   const card = cards[idx];
   const finished = loaded && idx >= cards.length;
+  // 复述目标：识物卡优先跟读可说的短句（phrase），否则用单词/句子本身
+  const target = card?.phrase || card?.text || "";
+  const ttsSupported =
+    typeof window !== "undefined" && "speechSynthesis" in window;
+
+  function speak() {
+    if (!ttsSupported || !target) return;
+    try {
+      window.speechSynthesis.cancel();
+      const u = new SpeechSynthesisUtterance(target);
+      u.lang = "en-US";
+      u.rate = 0.9;
+      window.speechSynthesis.speak(u);
+    } catch {
+      // 忽略
+    }
+  }
 
   async function recognize(blob: Blob) {
     if (!card) return;
@@ -80,7 +97,7 @@ export default function Review() {
         setPhase("idle");
         return;
       }
-      const a = analyze(card.text, transcript);
+      const a = analyze(target, transcript);
       const flu = analyzeFluency(data.words ?? []);
       const missed = extractMissedWords(a.tokens);
       setAnalysis(a);
@@ -88,7 +105,7 @@ export default function Review() {
       setRevealed(true);
       setPhase("scored");
       try {
-        const added = await addMissedWordCards(missed, card.text);
+        const added = await addMissedWordCards(missed, target);
         if (added.length > 0) setNewCards(added);
       } catch {
         // 记录失败不阻断流程
@@ -187,11 +204,26 @@ export default function Review() {
               </p>
             ) : null}
 
-            {/* 答案（句子） */}
+            {/* 发音示范：识物卡复习时先听再回忆；句子卡揭晓后显示 */}
+            {(card.kind === "pronunciation" || revealed) && (
+              <button
+                onClick={speak}
+                className="mt-4 inline-flex items-center gap-1 rounded-full border border-booth-600 px-4 py-1.5 text-xs text-ink-200 hover:border-signal"
+              >
+                🔊 听发音
+              </button>
+            )}
+
+            {/* 答案（句子 / 单词） */}
             {revealed ? (
-              <p className="mt-4 font-display text-2xl leading-relaxed text-ink-50">
-                {card.text}
-              </p>
+              <div className="mt-4">
+                <p className="font-display text-2xl leading-relaxed text-ink-50">
+                  {card.text}
+                </p>
+                {card.phrase && (
+                  <p className="mt-1 font-mono text-sm text-signal">“{card.phrase}”</p>
+                )}
+              </div>
             ) : (
               <p className="mt-4 text-sm text-ink-400">
                 试着回忆并说出来，然后查看答案

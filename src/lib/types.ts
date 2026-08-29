@@ -46,6 +46,7 @@ export interface Card {
   text: string;
   sentenceId?: string;
   chinese?: string; // 中文释义（拍照识物卡）
+  phrase?: string; // 带动词的可跟读短句（拍照识物卡，如 turn on the tap）
   hint?: string; // 复述提示
   srs: SrsState;
   createdAt: number;
@@ -67,6 +68,7 @@ export interface Attempt {
 export interface RecognitionObject {
   english: string;
   chinese: string;
+  phrase?: string; // 带动词的可跟读短句（如 tap → "turn on the tap"）
 }
 
 export interface Recognition {

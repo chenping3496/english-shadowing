@@ -4,8 +4,16 @@ import { useRef, useState } from "react";
 import AppShell from "@/components/AppShell";
 import { db } from "@/lib/db";
 import { uid } from "@/lib/id";
-import { addRecognitionCards } from "@/lib/cards";
+import { addRecognitionCards, addMissedWordCards } from "@/lib/cards";
+import { analyze, extractMissedWords, type Analysis } from "@/lib/score";
+import {
+  recordingSupported,
+  startRecording,
+  audioExtFromMime,
+} from "@/lib/recorder";
 import type { VisionObject } from "@/app/api/vision/route";
+
+type Phase = "idle" | "preparing" | "recording" | "recognizing" | "scored";
 
 export default function Snap() {
   const [image, setImage] = useState<string | null>(null);
@@ -16,12 +24,45 @@ export default function Snap() {
   const [added, setAdded] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
 
+  // 跟读状态（优化：识物结果 → 听 → 说 → 错词进 SRS）
+  const [activeIdx, setActiveIdx] = useState<number | null>(null);
+  const [phase, setPhase] = useState<Phase>("idle");
+  const [result, setResult] = useState<Analysis | null>(null);
+  const [newCards, setNewCards] = useState<string[]>([]);
+  const stopRef = useRef<(() => void) | null>(null);
+
+  const supported = recordingSupported();
+  const ttsSupported =
+    typeof window !== "undefined" && "speechSynthesis" in window;
+
+  // 本地 TTS 发音示范（零成本，不调任何 API）
+  function speak(text: string) {
+    if (!ttsSupported || !text) return;
+    try {
+      window.speechSynthesis.cancel();
+      const u = new SpeechSynthesisUtterance(text);
+      u.lang = "en-US";
+      u.rate = 0.9;
+      window.speechSynthesis.speak(u);
+    } catch {
+      // 忽略
+    }
+  }
+
+  function resetShadow() {
+    setActiveIdx(null);
+    setPhase("idle");
+    setResult(null);
+    setNewCards([]);
+  }
+
   function handleFile(file: File | null) {
     if (!file) return;
     setSaved(false);
     setObjects([]);
     setError("");
     setAdded(0);
+    resetShadow();
     const reader = new FileReader();
     reader.onload = () => setImage(reader.result as string);
     reader.readAsDataURL(file);
@@ -34,6 +75,7 @@ export default function Snap() {
     setObjects([]);
     setSaved(false);
     setAdded(0);
+    resetShadow();
     try {
       const res = await fetch("/api/vision", {
         method: "POST",
@@ -65,12 +107,83 @@ export default function Snap() {
     setSaved(true);
   }
 
+  const target =
+    activeIdx != null
+      ? objects[activeIdx]?.phrase || objects[activeIdx]?.english || ""
+      : "";
+
+  async function recognizeShadow(blob: Blob) {
+    if (activeIdx == null || !target) return;
+    setPhase("recognizing");
+    setError("");
+    try {
+      const base64 = await new Promise<string>((resolve, reject) => {
+        const fr = new FileReader();
+        fr.onload = () => resolve((fr.result as string).split(",")[1] ?? "");
+        fr.onerror = () => reject(new Error("读取录音失败"));
+        fr.readAsDataURL(blob);
+      });
+      const res = await fetch("/api/asr", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ audio: base64, ext: audioExtFromMime(blob.type) }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error ?? "识别失败");
+        setPhase("idle");
+        return;
+      }
+      const transcript = (data.text ?? "").trim();
+      if (!transcript) {
+        setError("没有识别到语音，请再试一次");
+        setPhase("idle");
+        return;
+      }
+      const a = analyze(target, transcript);
+      const missed = extractMissedWords(a.tokens);
+      setResult(a);
+      setPhase("scored");
+      try {
+        const addedWords = await addMissedWordCards(missed, target);
+        if (addedWords.length > 0) setNewCards(addedWords);
+      } catch {
+        // 记录失败不阻断流程
+      }
+    } catch {
+      setError("网络错误，识别失败");
+      setPhase("idle");
+    }
+  }
+
+  function startShadow(idx: number) {
+    stopRef.current?.(); // 停掉上一个未结束的录音
+    setActiveIdx(idx);
+    setResult(null);
+    setNewCards([]);
+    setError("");
+    setPhase("preparing");
+    stopRef.current = startRecording(
+      {
+        onStop: (blob) => void recognizeShadow(blob),
+        onError: (m) => {
+          setError(m);
+          setPhase("idle");
+        },
+        onReady: () => setPhase("recording"),
+      },
+      15, // 短语较短，15 秒足够
+    );
+  }
+
+  const shadowBusy = phase === "preparing" || phase === "recording" || phase === "recognizing";
+
   return (
     <AppShell>
       <header className="px-5 pt-6 pb-3">
         <h1 className="font-display text-xl font-semibold text-ink-50">拍照识物</h1>
         <p className="mt-1 text-sm text-ink-300">
-          拍下身边事物，获得地道的英文表达
+          拍下身边事物，听一遍、跟读一遍，把它说出口
         </p>
       </header>
 
@@ -143,7 +256,7 @@ export default function Snap() {
         {objects.length > 0 && (
           <section className="space-y-2">
             <div className="flex items-center justify-between">
-              <h2 className="text-xs font-medium text-ink-300">识别结果</h2>
+              <h2 className="text-xs font-medium text-ink-300">识别结果 · 点 🔊 听，点 🎙 跟读</h2>
               <button
                 onClick={saveToReview}
                 className="rounded-full border border-signal px-4 py-1.5 text-xs font-semibold text-signal hover:bg-signal-dim"
@@ -152,19 +265,98 @@ export default function Snap() {
               </button>
             </div>
             <ul className="space-y-2">
-              {objects.map((o, i) => (
-                <li
-                  key={i}
-                  className="flex items-baseline justify-between rounded-xl border border-booth-700 bg-booth-900 px-4 py-3"
-                >
-                  <span className="font-display text-base font-semibold text-ink-50">
-                    {o.english}
-                  </span>
-                  <span className="text-sm text-ink-300">{o.chinese}</span>
-                </li>
-              ))}
+              {objects.map((o, i) => {
+                const isActive = activeIdx === i;
+                const phrase = o.phrase || o.english;
+                return (
+                  <li
+                    key={i}
+                    className="rounded-xl border border-booth-700 bg-booth-900 px-4 py-3"
+                  >
+                    <div className="flex items-baseline justify-between">
+                      <span className="font-display text-base font-semibold text-ink-50">
+                        {o.english}
+                      </span>
+                      <span className="text-sm text-ink-300">{o.chinese}</span>
+                    </div>
+                    {o.phrase && (
+                      <p className="mt-1 font-mono text-xs text-signal">
+                        “{o.phrase}”
+                      </p>
+                    )}
+
+                    <div className="mt-2 flex gap-2">
+                      <button
+                        onClick={() => speak(phrase)}
+                        className="flex-1 rounded-full border border-booth-600 py-1.5 text-xs text-ink-200 hover:border-signal"
+                      >
+                        🔊 听
+                      </button>
+                      <button
+                        onClick={() => {
+                          if (isActive && phase === "recording") {
+                            stopRef.current?.();
+                          } else {
+                            startShadow(i);
+                          }
+                        }}
+                        disabled={
+                          !supported ||
+                          (shadowBusy && !(isActive && phase === "recording"))
+                        }
+                        className="flex-1 rounded-full border border-signal py-1.5 text-xs font-semibold text-signal hover:bg-signal-dim disabled:opacity-40"
+                      >
+                        {isActive && phase === "recording" ? "■ 结束" : "🎙 跟读"}
+                      </button>
+                    </div>
+
+                    {/* 跟读状态 / 评分 */}
+                    {isActive && shadowBusy && (
+                      <p className="mt-2 text-xs text-ink-300">
+                        {phase === "preparing"
+                          ? "准备中…"
+                          : phase === "recording"
+                            ? "正在录音…请跟读"
+                            : "识别中…"}
+                      </p>
+                    )}
+                    {isActive && phase === "scored" && result && (
+                      <div className="mt-2 space-y-1 border-t border-booth-700 pt-2 text-xs">
+                        <p>
+                          得分{" "}
+                          <span
+                            className={`font-display text-sm font-bold ${
+                              result.score >= 85
+                                ? "text-good"
+                                : result.score >= 60
+                                  ? "text-warn"
+                                  : "text-rec"
+                            }`}
+                          >
+                            {result.score}
+                          </span>
+                          {result.transcript && (
+                            <span className="text-ink-400"> · 你读的：{result.transcript}</span>
+                          )}
+                        </p>
+                        {newCards.length > 0 && (
+                          <p className="text-warn">
+                            已把 {newCards.length} 个读错的词加入复习卡：{newCards.join("、")}
+                          </p>
+                        )}
+                      </div>
+                    )}
+                  </li>
+                );
+              })}
             </ul>
           </section>
+        )}
+
+        {!supported && objects.length > 0 && (
+          <p className="text-xs text-warn">
+            当前浏览器不支持录音，只能听发音，无法跟读打分
+          </p>
         )}
       </main>
     </AppShell>

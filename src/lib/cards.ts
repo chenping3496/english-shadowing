@@ -39,6 +39,7 @@ export async function addRecognitionCards(
       kind: "pronunciation",
       text,
       chinese: o.chinese,
+      phrase: o.phrase,
       hint: o.chinese,
       srs: newSrsState(),
       createdAt: Date.now(),
