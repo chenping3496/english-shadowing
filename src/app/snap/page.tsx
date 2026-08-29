@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import AppShell from "@/components/AppShell";
 import { db } from "@/lib/db";
 import { uid } from "@/lib/id";
@@ -12,9 +12,17 @@ import {
   audioExtFromMime,
 } from "@/lib/recorder";
 import { speak } from "@/lib/tts";
+import { hashImage, makeThumb } from "@/lib/image";
+import type { Recognition } from "@/lib/types";
 import type { VisionObject } from "@/app/api/vision/route";
 
 type Phase = "idle" | "preparing" | "recording" | "recognizing" | "scored";
+
+function formatTime(ts: number): string {
+  const d = new Date(ts);
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
 
 export default function Snap() {
   const [image, setImage] = useState<string | null>(null);
@@ -23,6 +31,8 @@ export default function Snap() {
   const [error, setError] = useState("");
   const [saved, setSaved] = useState(false);
   const [added, setAdded] = useState(0);
+  const [history, setHistory] = useState<Recognition[]>([]);
+  const [viewingHistory, setViewingHistory] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   // 跟读状态（优化：识物结果 → 听 → 说 → 错词进 SRS）
@@ -33,6 +43,20 @@ export default function Snap() {
   const stopRef = useRef<(() => void) | null>(null);
 
   const supported = recordingSupported();
+
+  // 历史记录：每次识别成功都存一条（含缩略图 + 去重哈希），可随时回看
+  function refreshHistory() {
+    db.recognitions
+      .orderBy("createdAt")
+      .reverse()
+      .limit(20)
+      .toArray()
+      .then(setHistory);
+  }
+
+  useEffect(() => {
+    refreshHistory();
+  }, []);
 
   function resetShadow() {
     setActiveIdx(null);
@@ -61,7 +85,18 @@ export default function Snap() {
     setSaved(false);
     setAdded(0);
     resetShadow();
+    setViewingHistory(null);
     try {
+      // 去重缓存：同一张图重复拍，直接复用上次结果，不再调视觉 API
+      const hash = hashImage(image);
+      const cached = await db.recognitions
+        .filter((r) => r.imageHash === hash)
+        .first();
+      if (cached) {
+        setObjects(cached.objects);
+        setViewingHistory(`${formatTime(cached.createdAt)} · 已缓存，未重复识别`);
+        return;
+      }
       const res = await fetch("/api/vision", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -72,7 +107,28 @@ export default function Snap() {
         setError(data.error ?? "识别失败");
         return;
       }
-      setObjects(data.objects ?? []);
+      const objs: VisionObject[] = data.objects ?? [];
+      setObjects(objs);
+      // 存历史（含去重哈希）；缩略图失败不影响历史与缓存
+      try {
+        const rid = uid();
+        await db.recognitions.add({
+          id: rid,
+          objects: objs,
+          imageHash: hash,
+          createdAt: Date.now(),
+        });
+        refreshHistory();
+        try {
+          const thumb = await makeThumb(image, 320);
+          await db.recognitions.update(rid, { imageThumb: thumb });
+          refreshHistory();
+        } catch {
+          // 缩略图失败静默忽略，历史仍保留
+        }
+      } catch {
+        // 历史写入失败静默忽略
+      }
     } catch {
       setError("网络错误，请重试");
     } finally {
@@ -80,14 +136,18 @@ export default function Snap() {
     }
   }
 
+  function openHistory(r: Recognition) {
+    setObjects(r.objects);
+    setViewingHistory(`${formatTime(r.createdAt)} · 历史记录`);
+    setSaved(false);
+    setAdded(0);
+    setError("");
+    resetShadow();
+  }
+
   async function saveToReview() {
     if (!objects.length) return;
     const n = await addRecognitionCards(objects);
-    await db.recognitions.add({
-      id: uid(),
-      objects,
-      createdAt: Date.now(),
-    });
     setAdded(n);
     setSaved(true);
   }
@@ -240,6 +300,11 @@ export default function Snap() {
         {/* 识别结果 */}
         {objects.length > 0 && (
           <section className="space-y-2">
+            {viewingHistory && (
+              <p className="rounded-lg bg-booth-800 px-3 py-2 text-xs text-signal">
+                {viewingHistory}
+              </p>
+            )}
             <div className="flex items-center justify-between">
               <h2 className="text-xs font-medium text-ink-300">识别结果 · 点 🔊 听，点 🎙 跟读</h2>
               <button
@@ -342,6 +407,36 @@ export default function Snap() {
           <p className="text-xs text-warn">
             当前浏览器不支持录音，只能听发音，无法跟读打分
           </p>
+        )}
+
+        {/* 拍摄历史：点开可再看之前的识别结果 */}
+        {history.length > 0 && (
+          <section className="space-y-2">
+            <h2 className="text-xs font-medium text-ink-300">拍摄历史 · 点开回看</h2>
+            <div className="flex gap-2 overflow-x-auto pb-1">
+              {history.map((r) => (
+                <button
+                  key={r.id}
+                  onClick={() => openHistory(r)}
+                  title={formatTime(r.createdAt)}
+                  className="shrink-0 overflow-hidden rounded-lg border border-booth-700 bg-booth-900 transition-colors hover:border-signal"
+                >
+                  {r.imageThumb ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={r.imageThumb}
+                      alt={formatTime(r.createdAt)}
+                      className="h-20 w-20 object-cover"
+                    />
+                  ) : (
+                    <span className="flex h-20 w-20 items-center justify-center text-xs text-ink-400">
+                      {r.objects[0]?.english ?? "图"}
+                    </span>
+                  )}
+                </button>
+              ))}
+            </div>
+          </section>
         )}
       </main>
     </AppShell>

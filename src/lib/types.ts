@@ -74,6 +74,8 @@ export interface RecognitionObject {
 export interface Recognition {
   id: string;
   objects: RecognitionObject[];
+  imageHash?: string; // 图片内容哈希（去重缓存 key，重复拍同一张图复用结果）
+  imageThumb?: string; // 缩略图 data URL（历史列表展示，不存原图）
   createdAt: number;
 }
 
