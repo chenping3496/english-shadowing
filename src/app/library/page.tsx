@@ -495,7 +495,7 @@ export default function Library() {
                   disabled={biliTranscribing || biliSelectedPage == null}
                   className="h-11 w-full rounded-full bg-signal font-semibold text-booth-950 transition-colors hover:bg-signal-strong disabled:opacity-50"
                 >
-                  {biliTranscribing ? "转写中…（约 30 秒）" : "转写并导入"}
+                  {biliTranscribing ? "转写中…（长视频需数分钟）" : "转写并导入"}
                 </button>
               </div>
             )}

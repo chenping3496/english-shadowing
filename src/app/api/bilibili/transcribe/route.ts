@@ -66,8 +66,22 @@ function splitSentences(words: AsrWord[]): Cue[] {
   return out;
 }
 
-/** 调 qwen-audio-3.0-asr-flash：base64 直传，同步返回词级时间戳 */
-async function transcribe(mp3Path: string): Promise<Cue[]> {
+const MAX_SEG_SEC = 280; // 阿里 ASR 单次音频上限 300s，留 20s 余量分段
+
+/** 用 ffmpeg 解析音频时长（秒）。`ffmpeg -i` 无输出会非零退出，Duration 在 stderr */
+async function getAudioDuration(mp3Path: string): Promise<number> {
+  try {
+    await execFileAsync(ffmpegPath, ["-i", mp3Path]);
+  } catch (e) {
+    const stderr = (e as { stderr?: string }).stderr ?? "";
+    const m = /Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)/.exec(stderr);
+    if (m) return (+m[1]) * 3600 + (+m[2]) * 60 + parseFloat(m[3]);
+  }
+  return 0;
+}
+
+/** 调 qwen-audio-3.0-asr-flash：base64 直传，返回段内相对词级时间戳（毫秒） */
+async function transcribeSegment(mp3Path: string): Promise<AsrWord[]> {
   const buf = await readFile(mp3Path);
   const dataUri = "data:audio/mpeg;base64," + buf.toString("base64");
   const res = await fetch(ASR_ENDPOINT, {
@@ -98,8 +112,44 @@ async function transcribe(mp3Path: string): Promise<Cue[]> {
   // 兼容 output.sentence 与 output.output.sentence 两种嵌套
   const sentence =
     data?.output?.output?.sentence ?? data?.output?.sentence ?? null;
-  const words: AsrWord[] = sentence?.words ?? [];
-  return splitSentences(words);
+  return sentence?.words ?? [];
+}
+
+/** 整段转写：切段 → 逐段 ASR → 词级时间戳加偏移 → 合并按句切分 */
+async function transcribe(mp3Path: string, dir: string): Promise<Cue[]> {
+  const duration = await getAudioDuration(mp3Path);
+  const segCount = Math.max(1, Math.ceil(duration / MAX_SEG_SEC));
+  const allWords: AsrWord[] = [];
+  for (let i = 0; i < segCount; i++) {
+    const segPath = join(dir, `seg_${i}.mp3`);
+    await execFileAsync(ffmpegPath, [
+      "-y",
+      "-ss",
+      String(i * MAX_SEG_SEC),
+      "-i",
+      mp3Path,
+      "-t",
+      String(MAX_SEG_SEC),
+      "-vn",
+      "-ac",
+      "1",
+      "-ar",
+      "16000",
+      "-b:a",
+      "64k",
+      segPath,
+    ]);
+    const words = await transcribeSegment(segPath);
+    const offsetMs = i * MAX_SEG_SEC * 1000;
+    for (const w of words) {
+      allWords.push({
+        ...w,
+        begin_time: (w.begin_time ?? 0) + offsetMs,
+        end_time: (w.end_time ?? 0) + offsetMs,
+      });
+    }
+  }
+  return splitSentences(allWords);
 }
 
 /** 无 CC 字幕的 B 站分 P：下载音频 → ffmpeg 抽 mp3 → ASR 转写 → 逐句 cues */
@@ -206,7 +256,7 @@ export async function POST(request: Request) {
       mp3Path,
     ]);
 
-    const cues = await transcribe(mp3Path);
+    const cues = await transcribe(mp3Path, dir);
     if (!cues.length) {
       return NextResponse.json({ error: "未识别出语音内容，请换一集试试" }, { status: 422 });
     }
