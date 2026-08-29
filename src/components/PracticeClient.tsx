@@ -10,7 +10,7 @@ import { analyze, type Analysis } from "@/lib/score";
 import { recordingSupported, startRecording, audioExtFromMime } from "@/lib/recorder";
 import type { Material, Sentence } from "@/lib/types";
 
-type Phase = "idle" | "recording" | "recognizing" | "scored";
+type Phase = "idle" | "preparing" | "recording" | "recognizing" | "scored";
 type MediaKind = "audio" | "video" | null;
 
 export default function PracticeClient({ materialId }: { materialId: string }) {
@@ -246,7 +246,7 @@ export default function PracticeClient({ materialId }: { materialId: string }) {
     if (!supported) return;
     setError("");
     setResult(null);
-    setPhase("recording");
+    setPhase("preparing");
     stopRef.current = startRecording(
       {
         onStop: (blob) => void recognizeAndScore(blob),
@@ -254,6 +254,7 @@ export default function PracticeClient({ materialId }: { materialId: string }) {
           setError(m);
           setPhase("idle");
         },
+        onReady: () => setPhase("recording"),
       },
       30,
     );
@@ -424,7 +425,11 @@ export default function PracticeClient({ materialId }: { materialId: string }) {
               )}
 
               {/* 波形 / 识别状态 */}
-              {phase === "recording" ? (
+              {phase === "preparing" ? (
+                <div className="flex h-14 items-center justify-center">
+                  <p className="text-sm text-ink-300">准备中…</p>
+                </div>
+              ) : phase === "recording" ? (
                 <div className="flex h-14 items-end gap-1">
                   {Array.from({ length: 20 }).map((_, i) => (
                     <span
@@ -462,6 +467,11 @@ export default function PracticeClient({ materialId }: { materialId: string }) {
             </div>
 
             {/* 录音提示 */}
+            {phase === "preparing" && (
+              <p className="mx-auto mt-4 min-h-6 max-w-sm text-sm text-ink-200">
+                正在启动麦克风…
+              </p>
+            )}
             {phase === "recording" && (
               <p className="mx-auto mt-4 min-h-6 max-w-sm text-sm text-ink-200">
                 正在录音…请跟读
@@ -544,6 +554,13 @@ export default function PracticeClient({ materialId }: { materialId: string }) {
                 下一句 →
               </button>
             </>
+          ) : phase === "preparing" ? (
+            <button
+              disabled
+              className="flex items-center gap-2 rounded-full bg-signal px-8 py-3 text-base font-semibold text-booth-950 transition-colors disabled:opacity-50"
+            >
+              准备中…
+            </button>
           ) : phase === "recording" ? (
             <button
               onClick={stopListening}

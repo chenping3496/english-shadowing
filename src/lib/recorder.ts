@@ -5,6 +5,8 @@
 export interface RecorderCallbacks {
   onStop: (blob: Blob) => void;
   onError: (message: string) => void;
+  /** 麦克风就绪、MediaRecorder 已开始采集时触发（此时才开始提示「请跟读」） */
+  onReady?: () => void;
 }
 
 /** 浏览器是否支持录音 */
@@ -121,6 +123,7 @@ export function startRecording(
       else cb.onError("录音为空，请重试");
     };
     mediaRecorder.start(250);
+    cb.onReady?.();
     timer = window.setTimeout(finish, maxSec * 1000);
   })();
 
