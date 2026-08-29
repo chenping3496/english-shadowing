@@ -89,7 +89,19 @@ export async function POST(request: Request) {
     const sentence =
       data?.output?.output?.sentence ?? data?.output?.sentence ?? null;
     const text = (sentence?.text ?? "").trim();
-    return NextResponse.json({ text });
+    // 词级时间戳（毫秒→秒），供流利度（停顿/语速）免费计算
+    const words = (
+      (sentence?.words ?? []) as {
+        begin_time?: number;
+        end_time?: number;
+        text?: string;
+      }[]
+    ).map((w) => ({
+      begin: (w.begin_time ?? 0) / 1000,
+      end: (w.end_time ?? 0) / 1000,
+      text: w.text ?? "",
+    }));
+    return NextResponse.json({ text, words });
   } catch (e) {
     return NextResponse.json(
       { error: e instanceof Error ? e.message : "识别失败" },

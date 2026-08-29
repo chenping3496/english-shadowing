@@ -50,6 +50,35 @@ export async function addRecognitionCards(
   return added;
 }
 
+/** 把跟读/复述读错的词生成发音卡（kind=pronunciation，去重），返回实际新增的词 */
+export async function addMissedWordCards(
+  missedWords: string[],
+  context: string,
+): Promise<string[]> {
+  const existing = new Set(
+    (await db.cards.filter((c) => c.kind === "pronunciation").toArray()).map(
+      (c) => c.text,
+    ),
+  );
+  const added: string[] = [];
+  for (const word of missedWords) {
+    const text = word.trim();
+    if (!text || existing.has(text)) continue;
+    const card: Card = {
+      id: uid(),
+      kind: "pronunciation",
+      text,
+      hint: context, // 原句作提示：复习时看到原句，回忆/读出这个错词
+      srs: newSrsState(),
+      createdAt: Date.now(),
+    };
+    await db.cards.add(card);
+    existing.add(text);
+    added.push(text);
+  }
+  return added;
+}
+
 /** 加载到期的复习卡（按到期时间排序） */
 export async function loadDueCards(): Promise<Card[]> {
   const all = await db.cards.toArray();

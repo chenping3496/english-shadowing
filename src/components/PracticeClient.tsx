@@ -4,9 +4,15 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { db } from "@/lib/db";
 import { uid } from "@/lib/id";
-import { ensureSentenceCard } from "@/lib/cards";
+import { ensureSentenceCard, addMissedWordCards } from "@/lib/cards";
 import { bumpSession } from "@/lib/stats";
-import { analyze, type Analysis } from "@/lib/score";
+import {
+  analyze,
+  analyzeFluency,
+  extractMissedWords,
+  type Analysis,
+  type Fluency,
+} from "@/lib/score";
 import { recordingSupported, startRecording, audioExtFromMime } from "@/lib/recorder";
 import type { Material, Sentence } from "@/lib/types";
 
@@ -20,6 +26,8 @@ export default function PracticeClient({ materialId }: { materialId: string }) {
   const [idx, setIdx] = useState(0);
   const [phase, setPhase] = useState<Phase>("idle");
   const [result, setResult] = useState<Analysis | null>(null);
+  const [fluency, setFluency] = useState<Fluency | null>(null);
+  const [newCards, setNewCards] = useState<string[]>([]);
   const [myAudioUrl, setMyAudioUrl] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [doneScores, setDoneScores] = useState<number[]>([]);
@@ -252,7 +260,10 @@ export default function PracticeClient({ materialId }: { materialId: string }) {
           return;
         }
         const analysis = analyze(sentence.text, transcript);
+        const flu = analyzeFluency(data.words ?? []);
+        const missed = extractMissedWords(analysis.tokens);
         setResult(analysis);
+        setFluency(flu);
         setPhase("scored");
         setDoneScores((prev) => [...prev, analysis.score]);
         try {
@@ -267,6 +278,11 @@ export default function PracticeClient({ materialId }: { materialId: string }) {
           });
           await ensureSentenceCard(sentence);
           await bumpSession(analysis.score);
+          // 优化4：读错/漏读的实义词 → 自动生成发音卡进 SRS
+          if (missed.length > 0) {
+            const added = await addMissedWordCards(missed, sentence.text);
+            if (added.length > 0) setNewCards(added);
+          }
         } catch {
           // 记录失败不阻断流程
         }
@@ -282,6 +298,8 @@ export default function PracticeClient({ materialId }: { materialId: string }) {
     if (!supported) return;
     setError("");
     setResult(null);
+    setFluency(null);
+    setNewCards([]);
     setPhase("preparing");
     stopRef.current = startRecording(
       {
@@ -306,6 +324,8 @@ export default function PracticeClient({ materialId }: { materialId: string }) {
       setIdx(Math.max(0, Math.min(sentences.length - 1, next)));
       setPhase("idle");
       setResult(null);
+      setFluency(null);
+      setNewCards([]);
       setError("");
     },
     [sentences.length, stopPlayback],
@@ -315,6 +335,8 @@ export default function PracticeClient({ materialId }: { materialId: string }) {
     playSentence();
     setPhase("idle");
     setResult(null);
+    setFluency(null);
+    setNewCards([]);
     setError("");
   };
 
@@ -535,6 +557,17 @@ export default function PracticeClient({ materialId }: { materialId: string }) {
                 {result.transcript && (
                   <p className="mt-2 border-t border-booth-700 pt-2 text-sm text-ink-300">
                     你读的：{result.transcript}
+                  </p>
+                )}
+                {fluency && (
+                  <p className="mt-2 border-t border-booth-700 pt-2 text-xs text-ink-300">
+                    流利度：{fluency.wpm} 词/分
+                    {fluency.pauses > 0 && ` · ${fluency.pauses} 处明显停顿`}
+                  </p>
+                )}
+                {newCards.length > 0 && (
+                  <p className="mt-2 text-xs text-warn">
+                    已把 {newCards.length} 个读错的词加入复习卡：{newCards.join("、")}
                   </p>
                 )}
                 <div className="mt-3 flex gap-2 border-t border-booth-700 pt-3">

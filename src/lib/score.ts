@@ -75,3 +75,58 @@ export function analyze(target: string, transcript: string): Analysis {
 
   return { score, tokens, transcript: normalizeText(transcript) };
 }
+
+export interface FluencyWord {
+  begin: number; // 秒
+  end: number; // 秒
+  text: string;
+}
+
+export interface Fluency {
+  wpm: number; // 语速（词/分钟）
+  pauses: number; // 明显停顿次数（词间间隔 ≥ 0.5s）
+  durationSec: number;
+}
+
+/** 从 ASR 词级时间戳计算流利度指标（零成本纯计算，不调任何 API） */
+export function analyzeFluency(words: FluencyWord[]): Fluency | null {
+  if (!words.length) return null;
+  const durationSec = Math.max(
+    0.1,
+    words[words.length - 1].end - words[0].begin,
+  );
+  const wpm = Math.round((words.length / durationSec) * 60);
+  let pauses = 0;
+  for (let i = 1; i < words.length; i++) {
+    if (words[i].begin - words[i - 1].end >= 0.5) pauses++;
+  }
+  return { wpm, pauses, durationSec };
+}
+
+const FUNCTION_WORDS = new Set([
+  "the", "a", "an", "is", "are", "was", "were", "be", "been", "being", "to",
+  "of", "in", "on", "at", "for", "with", "and", "or", "but", "not", "no",
+  "yes", "it", "this", "that", "these", "those", "i", "you", "he", "she",
+  "we", "they", "me", "my", "your", "his", "her", "our", "their", "do",
+  "does", "did", "have", "has", "had", "will", "would", "can", "could",
+  "should", "shall", "may", "might", "must", "just", "so", "very", "really",
+  "as", "if", "then", "than", "when", "what", "who", "whom", "which",
+  "there", "here", "up", "down", "out", "off", "over", "under", "again",
+  "all", "some", "any", "more", "most", "get", "got", "go", "going", "come",
+  "came", "know", "see", "say", "said", "like", "want", "let", "im", "dont",
+  "youre", "were", "theyre", "whats", "thats", "its",
+]);
+
+/** 从 tokens 提取读错/漏读的实义词（过滤功能词与超短词），去重，用于生成发音卡 */
+export function extractMissedWords(tokens: TargetToken[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const t of tokens) {
+    const w = normalizeText(t.text);
+    if (!t.hit && w.length > 1 && !FUNCTION_WORDS.has(w) && !seen.has(w)) {
+      seen.add(w);
+      out.push(w);
+    }
+  }
+  return out;
+}

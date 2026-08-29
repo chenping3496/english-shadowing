@@ -2,9 +2,15 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { loadDueCards, applyReview } from "@/lib/cards";
-import { analyze, type Analysis } from "@/lib/score";
-import { speechSupported, startRecognition } from "@/lib/speech";
+import { loadDueCards, applyReview, addMissedWordCards } from "@/lib/cards";
+import {
+  analyze,
+  analyzeFluency,
+  extractMissedWords,
+  type Analysis,
+  type Fluency,
+} from "@/lib/score";
+import { recordingSupported, startRecording, audioExtFromMime } from "@/lib/recorder";
 import { Rating, GRADE_LABELS, type Grade } from "@/lib/fsrs";
 import type { Card } from "@/lib/types";
 
@@ -21,13 +27,15 @@ export default function Review() {
   const [idx, setIdx] = useState(0);
   const [revealed, setRevealed] = useState(false);
   const [analysis, setAnalysis] = useState<Analysis | null>(null);
-  const [interim, setInterim] = useState("");
-  const [listening, setListening] = useState(false);
+  const [fluency, setFluency] = useState<Fluency | null>(null);
+  const [newCards, setNewCards] = useState<string[]>([]);
+  const [phase, setPhase] = useState<
+    "idle" | "preparing" | "recording" | "recognizing" | "scored"
+  >("idle");
   const [error, setError] = useState("");
 
-  const finalRef = useRef("");
   const stopRef = useRef<(() => void) | null>(null);
-  const supported = speechSupported();
+  const supported = recordingSupported();
 
   useEffect(() => {
     loadDueCards().then((c) => {
@@ -41,25 +49,74 @@ export default function Review() {
   const card = cards[idx];
   const finished = loaded && idx >= cards.length;
 
+  async function recognize(blob: Blob) {
+    if (!card) return;
+    setPhase("recognizing");
+    setError("");
+    try {
+      const base64 = await new Promise<string>((resolve, reject) => {
+        const fr = new FileReader();
+        fr.onload = () => resolve((fr.result as string).split(",")[1] ?? "");
+        fr.onerror = () => reject(new Error("读取录音失败"));
+        fr.readAsDataURL(blob);
+      });
+      const res = await fetch("/api/asr", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          audio: base64,
+          ext: audioExtFromMime(blob.type),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error ?? "识别失败");
+        setPhase("idle");
+        return;
+      }
+      const transcript = (data.text ?? "").trim();
+      if (!transcript) {
+        setError("没有识别到语音，请再试一次");
+        setPhase("idle");
+        return;
+      }
+      const a = analyze(card.text, transcript);
+      const flu = analyzeFluency(data.words ?? []);
+      const missed = extractMissedWords(a.tokens);
+      setAnalysis(a);
+      setFluency(flu);
+      setRevealed(true);
+      setPhase("scored");
+      try {
+        const added = await addMissedWordCards(missed, card.text);
+        if (added.length > 0) setNewCards(added);
+      } catch {
+        // 记录失败不阻断流程
+      }
+    } catch {
+      setError("网络错误，识别失败");
+      setPhase("idle");
+    }
+  }
+
   function startListening() {
     if (!card) return;
     setError("");
-    finalRef.current = "";
-    setInterim("");
     setAnalysis(null);
-    setListening(true);
-    stopRef.current = startRecognition({
-      onInterim: setInterim,
-      onFinal: (t) => {
-        finalRef.current = (finalRef.current + " " + t).trim();
+    setFluency(null);
+    setNewCards([]);
+    setPhase("preparing");
+    stopRef.current = startRecording(
+      {
+        onStop: (blob) => void recognize(blob),
+        onError: (m) => {
+          setError(m);
+          setPhase("idle");
+        },
+        onReady: () => setPhase("recording"),
       },
-      onError: (m) => setError(m),
-      onEnd: () => {
-        setListening(false);
-        setRevealed(true);
-        setAnalysis(analyze(card.text, finalRef.current.trim()));
-      },
-    });
+      30,
+    );
   }
 
   async function grade(g: Grade) {
@@ -67,7 +124,9 @@ export default function Review() {
     await applyReview(card.id, g);
     setRevealed(false);
     setAnalysis(null);
-    setInterim("");
+    setFluency(null);
+    setNewCards([]);
+    setPhase("idle");
     setError("");
     setIdx((i) => i + 1);
   }
@@ -141,7 +200,7 @@ export default function Review() {
 
             {/* 识别状态 */}
             <div className="mt-8 flex min-h-16 flex-col items-center justify-center gap-3">
-              {listening ? (
+              {phase === "preparing" || phase === "recording" ? (
                 <div className="flex h-12 items-end gap-1">
                   {Array.from({ length: 16 }).map((_, i) => (
                     <span
@@ -154,6 +213,8 @@ export default function Review() {
                     />
                   ))}
                 </div>
+              ) : phase === "recognizing" ? (
+                <p className="text-sm text-ink-300">识别中…</p>
               ) : analysis ? (
                 <div className="space-y-1">
                   <span
@@ -170,10 +231,36 @@ export default function Review() {
                   <p className="text-xs text-ink-300">复述得分</p>
                 </div>
               ) : null}
-              {listening && (
+              {phase === "preparing" && (
                 <p className="min-h-5 max-w-sm text-sm text-ink-200">
-                  {interim || "（正在听…）"}
+                  正在启动麦克风…
                 </p>
+              )}
+              {phase === "recording" && (
+                <p className="min-h-5 max-w-sm text-sm text-ink-200">
+                  正在录音…请复述
+                </p>
+              )}
+              {analysis && (
+                <>
+                  {analysis.transcript && (
+                    <p className="max-w-sm text-sm text-ink-300">
+                      你读的：{analysis.transcript}
+                    </p>
+                  )}
+                  {fluency && (
+                    <p className="text-xs text-ink-300">
+                      流利度：{fluency.wpm} 词/分
+                      {fluency.pauses > 0 && ` · ${fluency.pauses} 处明显停顿`}
+                    </p>
+                  )}
+                  {newCards.length > 0 && (
+                    <p className="max-w-sm text-xs text-warn">
+                      已把 {newCards.length} 个读错的词加入复习卡：
+                      {newCards.join("、")}
+                    </p>
+                  )}
+                </>
               )}
               {error && (
                 <p className="max-w-sm text-sm text-rec">{error}</p>
@@ -186,19 +273,30 @@ export default function Review() {
                 <div className="flex gap-3">
                   {supported && (
                     <button
-                      onClick={startListening}
-                      disabled={listening}
+                      onClick={() =>
+                        phase === "recording"
+                          ? stopRef.current?.()
+                          : startListening()
+                      }
+                      disabled={phase === "preparing" || phase === "recognizing"}
                       className="flex items-center gap-2 rounded-full bg-signal px-6 py-3 text-sm font-semibold text-booth-950 hover:bg-signal-strong disabled:opacity-50"
                     >
                       <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
                         <rect x="9" y="3" width="6" height="12" rx="3" />
                         <path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v3" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
                       </svg>
-                      {listening ? "听你读…" : "复述"}
+                      {phase === "preparing" || phase === "recognizing"
+                        ? "准备中…"
+                        : phase === "recording"
+                          ? "结束录音"
+                          : "复述"}
                     </button>
                   )}
                   <button
-                    onClick={() => setRevealed(true)}
+                    onClick={() => {
+                      stopRef.current?.();
+                      setRevealed(true);
+                    }}
                     className="rounded-full border border-booth-600 px-6 py-3 text-sm text-ink-200 hover:border-signal"
                   >
                     显示答案
@@ -224,7 +322,7 @@ export default function Review() {
 
             {!supported && !revealed && (
               <p className="mt-4 text-xs text-warn">
-                当前浏览器不支持语音识别，可点击「显示答案」直接自评
+                当前浏览器不支持录音，可点击「显示答案」直接自评
               </p>
             )}
           </section>
