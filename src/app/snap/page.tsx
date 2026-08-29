@@ -112,12 +112,16 @@ export default function Snap() {
       const cached = await db.recognitions
         .filter((r) => r.imageHash === hash)
         .first();
-      if (cached) {
+      // 旧版缓存缺 phraseChinese（短语释义），不算命中，删掉重识别以补齐字段
+      if (cached && cached.objects.some((o) => o.phraseChinese)) {
         setObjects(cached.objects);
         setCurrentRecognitionId(cached.id);
         setViewingHistory(`${formatTime(cached.createdAt)} · 已缓存，未重复识别`);
         void syncAddedWords(cached.objects);
         return;
+      }
+      if (cached) {
+        await db.recognitions.delete(cached.id);
       }
       const res = await fetch("/api/vision", {
         method: "POST",
