@@ -12,12 +12,25 @@ export interface SentenceDraft {
 
 const SENT_END = /[.!?。！？…]["']?$/;
 
+// 句子切分参数（B 站 CC 字幕普遍不带句末标点，需靠时间间隙 + 长度兜底）
+const GAP_SEC = 0.7; // 相邻字幕时间间隙 ≥ 此值视为句子边界（说话人停顿）
+const MAX_WORDS = 14; // 英文句子上限（词数）
+const MAX_CHARS = 20; // 中文等无空格语言句子上限（字符数）
+const CJK = /[一-鿿぀-ヿ가-힯]/;
+
+/** 累积文本是否过长（超出跟读单元上限），中英文分别按字符数/词数判断 */
+function tooLong(text: string): boolean {
+  if (CJK.test(text)) return text.replace(/\s+/g, "").length >= MAX_CHARS;
+  return text.trim().split(/\s+/).filter(Boolean).length >= MAX_WORDS;
+}
+
 /** 把字幕条目合并成句子级跟读单元 */
 export function segmentCues(cues: SegmentSource[]): SentenceDraft[] {
   const out: SentenceDraft[] = [];
   let buf: string[] = [];
   let start = 0;
   let end = 0;
+  let prevEnd = -1;
 
   const flush = () => {
     if (buf.length) {
@@ -28,11 +41,25 @@ export function segmentCues(cues: SegmentSource[]): SentenceDraft[] {
   };
 
   for (const cue of cues) {
+    const t = cue.text.trim();
+    if (!t) continue;
+
+    // 信号1：与上一条字幕时间间隙过大 → 上一句已结束
+    if (buf.length > 0 && cue.startSec - prevEnd >= GAP_SEC) flush();
+
     if (buf.length === 0) start = cue.startSec;
     end = cue.endSec;
-    const t = cue.text.trim();
     buf.push(t);
-    if (SENT_END.test(t)) flush();
+    prevEnd = cue.endSec;
+
+    // 信号2：句末标点 → 本句结束
+    if (SENT_END.test(t)) {
+      flush();
+      continue;
+    }
+
+    // 信号3：累积过长 → 强制切（防止 CC 无标点导致一大段）
+    if (tooLong(buf.join(" "))) flush();
   }
   flush();
   return out;
