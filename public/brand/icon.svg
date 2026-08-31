@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="拍拍说 SnapSay">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1a1713"/>
+      <stop offset="1" stop-color="#0d0b09"/>
+    </linearGradient>
+    <linearGradient id="bubble" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffa05e"/>
+      <stop offset="1" stop-color="#ff8c42"/>
+    </linearGradient>
+  </defs>
+
+  <!-- 圆角方形底 -->
+  <rect width="512" height="512" rx="116" fill="url(#bg)"/>
+
+  <!-- 对话气泡（开口说） -->
+  <rect x="88" y="72" width="336" height="264" rx="92" fill="url(#bubble)"/>
+  <path d="M168 328 L142 412 L248 332 Z" fill="#ff8c42"/>
+
+  <!-- 相机镜头（拍照识物） -->
+  <circle cx="256" cy="204" r="80" fill="#14110e"/>
+  <circle cx="256" cy="204" r="46" fill="none" stroke="#ff8c42" stroke-width="12"/>
+  <circle cx="256" cy="204" r="14" fill="#f0e9dd"/>
+</svg>
