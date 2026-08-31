@@ -113,7 +113,12 @@ export async function loadDashboard() {
     db.sentences.toArray(),
   ]);
   const dates = sessions.map((s) => s.date);
-  const due = cards.filter((c) => isDue(c.srs)).length;
+  const dueSentence = cards.filter(
+    (c) => c.kind === "sentence" && isDue(c.srs),
+  ).length;
+  const dueWord = cards.filter(
+    (c) => c.kind === "pronunciation" && isDue(c.srs),
+  ).length;
   const today = fmt(new Date());
   const todayDone = sessions
     .filter((s) => s.date === today)
@@ -121,7 +126,8 @@ export async function loadDashboard() {
   return {
     streak: computeStreak(dates),
     last7: last7Days(dates),
-    dueCards: due,
+    dueSentenceCards: dueSentence,
+    dueWordCards: dueWord,
     materialCount: materials.length,
     sentenceCount: sentences.length,
     todayDone,

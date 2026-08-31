@@ -1,7 +1,7 @@
 import { db } from "./db";
 import { uid } from "./id";
 import { newSrsState, review, isDue, type Grade } from "./fsrs";
-import type { Card, Sentence, RecognitionObject } from "./types";
+import type { Card, Sentence, RecognitionObject, CardKind } from "./types";
 
 /** 为句子创建复习卡（已存在则跳过） */
 export async function ensureSentenceCard(sentence: Sentence): Promise<void> {
@@ -93,9 +93,9 @@ export async function addMissedWordCards(
   return added;
 }
 
-/** 加载到期的复习卡（按到期时间排序） */
-export async function loadDueCards(): Promise<Card[]> {
-  const all = await db.cards.toArray();
+/** 加载某一类到期的复习卡（按到期时间排序） */
+export async function loadDueCards(kind: CardKind): Promise<Card[]> {
+  const all = await db.cards.where("kind").equals(kind).toArray();
   return all
     .filter((c) => isDue(c.srs))
     .sort((a, b) => a.srs.due - b.srs.due);

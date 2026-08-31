@@ -17,7 +17,8 @@ export default function Home() {
   const d = data ?? {
     streak: 0,
     last7: [],
-    dueCards: 0,
+    dueSentenceCards: 0,
+    dueWordCards: 0,
     materialCount: 0,
     sentenceCount: 0,
     todayDone: 0,
@@ -69,8 +70,9 @@ export default function Home() {
         <section>
           <h2 className="mb-2 text-xs font-medium text-ink-300">今日任务</h2>
           <div className="grid grid-cols-2 gap-3">
-            <StatTile label="待复习" value={d.dueCards} unit="卡" accent href="/review" />
-            <StatTile label="今日已跟读" value={d.todayDone} unit="句" />
+            <StatTile label="句子复习" value={d.dueSentenceCards} unit="句" accent href="/review/sentence" />
+            <StatTile label="单词复习" value={d.dueWordCards} unit="词" accent href="/review/word" />
+            <StatTile label="今日已跟读" value={d.todayDone} unit="句" className="col-span-2" />
           </div>
         </section>
 
@@ -121,12 +123,14 @@ function StatTile({
   unit,
   accent,
   href,
+  className,
 }: {
   label: string;
   value: number;
   unit: string;
   accent?: boolean;
   href?: string;
+  className?: string;
 }) {
   const inner = (
     <>
@@ -139,15 +143,13 @@ function StatTile({
       </p>
     </>
   );
+  const base = `block rounded-2xl border border-booth-700 bg-booth-900 p-4 transition-colors hover:border-signal ${className ?? ""}`;
   if (href) {
     return (
-      <Link
-        href={href}
-        className="block rounded-2xl border border-booth-700 bg-booth-900 p-4 transition-colors hover:border-signal"
-      >
+      <Link href={href} className={base}>
         {inner}
       </Link>
     );
   }
-  return <div className="rounded-2xl border border-booth-700 bg-booth-900 p-4">{inner}</div>;
+  return <div className={base}>{inner}</div>;
 }

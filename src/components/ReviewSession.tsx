@@ -14,15 +14,8 @@ import {
 import { recordingSupported, startRecording, audioExtFromMime } from "@/lib/recorder";
 import { speak } from "@/lib/tts";
 import { useMaterialMedia } from "@/components/useMaterialMedia";
-import { Rating, GRADE_LABELS, type Grade } from "@/lib/fsrs";
-import type { Card, Sentence, Material, Recognition } from "@/lib/types";
-
-const GRADES: { grade: Grade; style: string }[] = [
-  { grade: Rating.Again, style: "border-rec/40 text-rec hover:bg-rec/10" },
-  { grade: Rating.Hard, style: "border-warn/40 text-warn hover:bg-warn/10" },
-  { grade: Rating.Good, style: "border-good/40 text-good hover:bg-good/10" },
-  { grade: Rating.Easy, style: "border-signal/60 text-signal hover:bg-signal-dim" },
-];
+import { Rating, type Grade } from "@/lib/fsrs";
+import type { Card, Sentence, Material, Recognition, CardKind } from "@/lib/types";
 
 // 九宫格方位 → 图上数字标号的位置（百分比）
 const ZONE_POS: Record<string, { top?: string; left?: string; right?: string; bottom?: string }> = {
@@ -37,7 +30,13 @@ const ZONE_POS: Record<string, { top?: string; left?: string; right?: string; bo
   "bottom-right": { top: "92%", left: "92%" },
 };
 
-export default function Review() {
+export default function ReviewSession({ kind }: { kind: CardKind }) {
+  const isSentence = kind === "sentence";
+  const title = isSentence ? "句子复习" : "单词复习";
+  const emptyText = isSentence
+    ? "暂无待复习的句子，去跟读新素材吧"
+    : "暂无待复习的单词，去拍照或跟读攒几个吧";
+
   const [cards, setCards] = useState<Card[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [idx, setIdx] = useState(0);
@@ -58,16 +57,17 @@ export default function Review() {
   const supported = recordingSupported();
 
   useEffect(() => {
-    loadDueCards().then((c) => {
+    loadDueCards(kind).then((c) => {
       setCards(c);
       setLoaded(true);
     });
-  }, []);
+  }, [kind]);
 
   useEffect(() => () => stopRef.current?.(), []);
 
   const card = cards[idx];
-  const finished = loaded && idx >= cards.length;
+  const empty = loaded && cards.length === 0;
+  const finished = loaded && !empty && idx >= cards.length;
   // 跟读/复述目标：识物卡说单词（看图说词），句子卡跟读整句
   const target = card?.text || "";
 
@@ -159,16 +159,19 @@ export default function Review() {
       }
       const a = analyze(target, transcript);
       const flu = analyzeFluency(data.words ?? []);
-      const missed = extractMissedWords(a.tokens);
       setAnalysis(a);
       setFluency(flu);
       setRevealed(true);
       setPhase("scored");
-      try {
-        const added = await addMissedWordCards(missed, target);
-        if (added.length > 0) setNewCards(added);
-      } catch {
-        // 记录失败不阻断流程
+      // 句子复习把读错的词生成单词卡；单词复习里读错词本身已是卡，不再生成
+      if (isSentence) {
+        try {
+          const missed = extractMissedWords(a.tokens);
+          const added = await addMissedWordCards(missed, target);
+          if (added.length > 0) setNewCards(added);
+        } catch {
+          // 记录失败不阻断流程
+        }
       }
     } catch {
       setError("网络错误，识别失败");
@@ -207,6 +210,10 @@ export default function Review() {
     setNewCards([]);
     setPhase("idle");
     setError("");
+    if (g === Rating.Again) {
+      // 「再读一遍」：留在当前卡重新开始（视频/图重看、重新跟读），不前进
+      return;
+    }
     setIdx((i) => i + 1);
   }
 
@@ -217,20 +224,30 @@ export default function Review() {
           <Link href="/" className="text-sm text-ink-400 hover:text-ink-200">
             ← 返回
           </Link>
-          {!finished && (
+          {!finished && !empty && (
             <span className="font-mono text-xs text-ink-300">
               {idx + 1} / {cards.length}
             </span>
           )}
         </div>
         <h1 className="mt-3 font-display text-xl font-semibold text-ink-50">
-          复习
+          {title}
         </h1>
       </header>
 
       <main className="flex flex-1 flex-col justify-center py-8">
         {!loaded ? (
           <p className="text-center text-sm text-ink-300">加载中…</p>
+        ) : empty ? (
+          <section className="text-center">
+            <p className="mt-4 text-sm text-ink-300">{emptyText}</p>
+            <Link
+              href="/"
+              className="mt-6 inline-block rounded-full bg-signal px-6 py-2.5 text-sm font-semibold text-booth-950"
+            >
+              回今日
+            </Link>
+          </section>
         ) : finished ? (
           <section className="text-center">
             <div className="mx-auto flex h-20 w-20 items-center justify-center rounded-full border border-good/40 bg-good/10">
@@ -259,15 +276,15 @@ export default function Review() {
           </section>
         ) : (
           <section className="text-center">
-            {/* 提示词（关键词） */}
-            {card.hint ? (
+            {/* 单词卡：提示词（识物词=中文，错词=原句）；句子卡：无提示 */}
+            {!isSentence && card.hint ? (
               <p className="font-mono text-xs uppercase tracking-widest text-signal">
                 {card.hint}
               </p>
             ) : null}
 
             {/* 识物卡：调出拍照整图 + 标号，看图说词 */}
-            {card.kind === "pronunciation" && recognition?.imageThumb && (
+            {!isSentence && recognition?.imageThumb && (
               <div className="relative mx-auto mt-4 w-full max-w-sm overflow-hidden rounded-2xl border border-booth-700">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
@@ -296,7 +313,7 @@ export default function Review() {
             )}
 
             {/* sentence 卡：调出原视频片段，像初次跟读那样 */}
-            {card.kind === "sentence" && sentence && mediaKind === "video" && mediaSrc && (
+            {isSentence && sentence && mediaKind === "video" && mediaSrc && (
               <video
                 ref={setMediaRef}
                 src={mediaSrc}
@@ -306,20 +323,20 @@ export default function Review() {
                 onPause={onPause}
               />
             )}
-            {card.kind === "sentence" && sentence && (
+            {isSentence && sentence && (
               <button
                 onClick={playOriginal}
                 className="mt-4 inline-flex items-center gap-1 rounded-full border border-booth-600 px-4 py-1.5 text-xs text-ink-200 hover:border-signal"
               >
-                {playing ? "⏸ 播放中…" : "▶ 听原句"}
+                {playing ? "⏸ 播放中…" : "▶ 播放这句"}
               </button>
             )}
             {mediaError && (
               <p className="mt-2 text-xs text-rec">{mediaError}</p>
             )}
 
-            {/* 发音示范：识物卡复习时先听再回忆；句子卡揭晓后显示 */}
-            {(card.kind === "pronunciation" || revealed) && (
+            {/* 单词卡：发音示范，先听再回忆 */}
+            {!isSentence && (
               <button
                 onClick={() => void speak(target)}
                 className="mt-4 inline-flex items-center gap-1 rounded-full border border-booth-600 px-4 py-1.5 text-xs text-ink-200 hover:border-signal"
@@ -334,7 +351,7 @@ export default function Review() {
                 <p className="font-display text-2xl leading-relaxed text-ink-50">
                   {card.text}
                 </p>
-                {card.kind === "pronunciation" && card.chinese && (
+                {!isSentence && card.chinese && (
                   <p className="mt-1 text-sm text-ink-300">{card.chinese}</p>
                 )}
                 {card.phrase && (
@@ -441,7 +458,7 @@ export default function Review() {
                         ? "准备中…"
                         : phase === "recording"
                           ? "结束录音"
-                          : card.kind === "sentence"
+                          : isSentence
                             ? "跟读"
                             : "说出"}
                     </button>
@@ -458,17 +475,20 @@ export default function Review() {
                 </div>
               ) : (
                 <div className="w-full max-w-sm">
-                  <p className="mb-2 text-xs text-ink-400">掌握程度如何？</p>
-                  <div className="grid grid-cols-4 gap-2">
-                    {GRADES.map(({ grade: g, style }) => (
-                      <button
-                        key={g}
-                        onClick={() => grade(g)}
-                        className={`rounded-xl border py-3 text-sm font-semibold transition-colors ${style}`}
-                      >
-                        {GRADE_LABELS[g]}
-                      </button>
-                    ))}
+                  <p className="mb-2 text-xs text-ink-400">读得怎么样？</p>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      onClick={() => grade(Rating.Again)}
+                      className="rounded-xl border border-rec/40 py-3 text-sm font-semibold text-rec transition-colors hover:bg-rec/10"
+                    >
+                      再读一遍
+                    </button>
+                    <button
+                      onClick={() => grade(Rating.Good)}
+                      className="rounded-xl border border-good/40 py-3 text-sm font-semibold text-good transition-colors hover:bg-good/10"
+                    >
+                      下一句
+                    </button>
                   </div>
                 </div>
               )}
@@ -480,7 +500,7 @@ export default function Review() {
               </p>
             )}
 
-            {/* 本地音频素材：隐藏 <audio> 用于「听原句」 */}
+            {/* 本地音频素材：隐藏 <audio> 用于「播放这句」 */}
             {mediaKind === "audio" && (
               <audio
                 ref={setMediaRef}
